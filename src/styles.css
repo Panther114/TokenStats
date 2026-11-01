@@ -1,27 +1,23 @@
 /* ------------------------------------------------------------------ tokens */
 :root {
   color-scheme: light;
-  --bg: #f5f5f3;
+  --bg: #f7f7f8;
   --surface: #ffffff;
-  --surface-2: #f8f8f6;
-  --surface-3: #efefec;
-  --border: rgba(20, 20, 18, 0.08);
-  --border-strong: rgba(20, 20, 18, 0.14);
-  --text: #121211;
-  --text-2: #52514e;
-  --text-3: #8a8984;
-  --cell-0: #ebebe7;
-  --grid: rgba(20, 20, 18, 0.07);
-  --axis: rgba(20, 20, 18, 0.22);
-  --accent: #121211;
+  --surface-2: #f9f9fa;
+  --surface-3: #f0f0f2;
+  --border: #e7e7ea;
+  --border-strong: #d6d6db;
+  --text: #18181b;
+  --text-2: #52525b;
+  --text-3: #8e8e96;
+  --cell-0: #efeff1;
+  --grid: #f0f0f2;
+  --axis: #d4d4d8;
+  --accent: #18181b;
   --accent-text: #ffffff;
-  --shadow: 0 1px 2px rgba(20, 20, 18, 0.04), 0 4px 16px rgba(20, 20, 18, 0.04);
-  --shadow-pop: 0 12px 40px rgba(20, 20, 18, 0.16), 0 2px 6px rgba(20, 20, 18, 0.06);
-  --focus: #2a78d6;
-  --c-claude: #eb6834;
-  --c-codex: #2a78d6;
-  --c-opencode: #1baf7a;
-  --c-dsh: #eda100;
+  --shadow: 0 1px 2px rgba(24, 24, 27, 0.04);
+  --shadow-pop: 0 12px 32px rgba(24, 24, 27, 0.12), 0 2px 6px rgba(24, 24, 27, 0.06);
+  --focus: #3b82f6;
   --radius: 14px;
   --font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -31,52 +27,44 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
-    --bg: #0e0e10;
-    --surface: #161618;
-    --surface-2: #1b1b1e;
-    --surface-3: #232327;
-    --border: rgba(255, 255, 255, 0.07);
-    --border-strong: rgba(255, 255, 255, 0.13);
-    --text: #f0efec;
-    --text-2: #b4b3ad;
-    --text-3: #7c7b76;
-    --cell-0: #222226;
-    --grid: rgba(255, 255, 255, 0.06);
-    --axis: rgba(255, 255, 255, 0.2);
-    --accent: #f0efec;
-    --accent-text: #111111;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-    --focus: #3987e5;
-    --c-claude: #d95926;
-    --c-codex: #3987e5;
-    --c-opencode: #199e70;
-    --c-dsh: #c98500;
+    --bg: #0b0b0d;
+    --surface: #141416;
+    --surface-2: #19191c;
+    --surface-3: #212125;
+    --border: #232327;
+    --border-strong: #303036;
+    --text: #ededef;
+    --text-2: #a1a1aa;
+    --text-3: #6b6b73;
+    --cell-0: #1d1d21;
+    --grid: #1f1f23;
+    --axis: #34343a;
+    --accent: #ededef;
+    --accent-text: #111113;
+    --shadow: none;
+    --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --focus: #60a5fa;
   }
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0e0e10;
-  --surface: #161618;
-  --surface-2: #1b1b1e;
-  --surface-3: #232327;
-  --border: rgba(255, 255, 255, 0.07);
-  --border-strong: rgba(255, 255, 255, 0.13);
-  --text: #f0efec;
-  --text-2: #b4b3ad;
-  --text-3: #7c7b76;
-  --cell-0: #222226;
-  --grid: rgba(255, 255, 255, 0.06);
-  --axis: rgba(255, 255, 255, 0.2);
-  --accent: #f0efec;
-  --accent-text: #111111;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-  --focus: #3987e5;
-  --c-claude: #d95926;
-  --c-codex: #3987e5;
-  --c-opencode: #199e70;
-  --c-dsh: #c98500;
+  --bg: #0b0b0d;
+  --surface: #141416;
+  --surface-2: #19191c;
+  --surface-3: #212125;
+  --border: #232327;
+  --border-strong: #303036;
+  --text: #ededef;
+  --text-2: #a1a1aa;
+  --text-3: #6b6b73;
+  --cell-0: #1d1d21;
+  --grid: #1f1f23;
+  --axis: #34343a;
+  --accent: #ededef;
+  --accent-text: #111113;
+  --shadow: none;
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --focus: #60a5fa;
 }
 
 /* ------------------------------------------------------------------- base */
@@ -165,7 +153,7 @@ button {
   height: 6px;
   margin-right: 6px;
   border-radius: 50%;
-  background: #1baf7a;
+  background: #22c55e;
   vertical-align: 1px;
 }
 .status.busy .dot {
@@ -388,16 +376,26 @@ main {
   gap: 10px;
   min-width: 0;
 }
-.harness-name .glyph {
+.picon {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   flex: none;
   border-radius: 8px;
-  background: color-mix(in oklab, var(--c) 16%, transparent);
-  color: var(--c);
-  font: 700 11px/1 var(--font-display);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  overflow: hidden;
+}
+.picon svg {
+  width: 17px;
+  height: 17px;
+}
+.picon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .harness-name h3 {
   margin: 0;
@@ -505,7 +503,7 @@ main {
 }
 .mini-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   border-top: 1px solid var(--border);
   padding-top: 8px;
   gap: 8px;
@@ -807,7 +805,7 @@ table.models {
 /* ------------------------------------------------------------------ footer */
 footer.sources {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 16px;
   color: var(--text-3);
   font-size: 11.5px;
@@ -1034,4 +1032,67 @@ input[type='color']::-webkit-color-swatch {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ------------------------------------------------------- provider manager */
+.prov-list {
+  display: grid;
+  gap: 8px;
+}
+.prov-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.prov-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.prov-main input {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 2px 5px;
+}
+.prov-main input:hover,
+.prov-main input:focus {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  outline: none;
+}
+.prov-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.prov-path {
+  font: 11px var(--mono);
+  color: var(--text-2);
+}
+.prov-row .text-btn {
+  padding: 4px 8px;
+  font-size: 11.5px;
+}
+.switch input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+select {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: 9px;
+  padding: 6px 8px;
+  font-size: 12.5px;
+  max-width: 190px;
+}
+.drawer {
+  width: min(460px, 100vw);
 }

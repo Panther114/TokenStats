@@ -1,6 +1,7 @@
 //! Aggregates scanned entries into the compact report consumed by the dashboard.
 //! Days and hours use the system-local timezone.
-use crate::model::{Harness, HarnessData};
+use crate::model::HarnessData;
+use crate::providers::{kind_info, ProviderConfig};
 use crate::pricing::Pricing;
 use chrono::{Local, TimeZone, Timelike};
 use serde::Serialize;
@@ -8,8 +9,11 @@ use std::collections::{BTreeMap, HashMap};
 
 #[derive(Serialize)]
 pub struct HarnessInfo {
-    pub key: &'static str,
-    pub label: &'static str,
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub icon: String,
+    pub color: String,
     pub found: bool,
     pub roots: Vec<String>,
     pub files: usize,
@@ -66,7 +70,7 @@ fn local_day_hour(ts: i64) -> Option<(chrono::NaiveDate, u32)> {
     Some((dt.date_naive(), dt.hour()))
 }
 
-pub fn build(data: &[(Harness, HarnessData)], pricing: &Pricing, scan_ms: u128, parsed: usize, cached: usize) -> Report {
+pub fn build(data: &[(ProviderConfig, HarnessData)], pricing: &Pricing, scan_ms: u128, parsed: usize, cached: usize) -> Report {
     // Earliest day across all data (ignoring obviously invalid epoch timestamps).
     let min_ts = data
         .iter()
@@ -93,11 +97,15 @@ pub fn build(data: &[(Harness, HarnessData)], pricing: &Pricing, scan_ms: u128, 
     let mut sessions: HashMap<(u8, String), Sess> = HashMap::new();
     let mut harnesses = Vec::new();
 
-    for (h, d) in data {
-        let hk = *h as u8;
+    for (hk, (cfg, d)) in data.iter().enumerate() {
+        let hk = hk as u8;
+        let info = kind_info(&cfg.kind);
         harnesses.push(HarnessInfo {
-            key: h.key(),
-            label: h.label(),
+            id: cfg.id.clone(),
+            kind: cfg.kind.clone(),
+            label: cfg.name.clone(),
+            icon: info.map(|k| k.icon).unwrap_or("custom").to_string(),
+            color: cfg.color.clone().unwrap_or_else(|| info.map(|k| k.color).unwrap_or("#888888").to_string()),
             found: !d.roots.is_empty(),
             roots: d.roots.clone(),
             files: d.files,
@@ -110,7 +118,7 @@ pub fn build(data: &[(Harness, HarnessData)], pricing: &Pricing, scan_ms: u128, 
             let di = day_ix(day);
             let key = (hk, e.model.clone(), e.provider.clone());
             let mi = *model_ix.entry(key).or_insert_with(|| {
-                let found = pricing.find(*h, &e.model, e.provider.as_deref());
+                let found = pricing.find(&e.model, e.provider.as_deref());
                 models.push(ModelInfo {
                     name: e.model.clone(),
                     harness: hk,
@@ -131,7 +139,7 @@ pub fn build(data: &[(Harness, HarnessData)], pricing: &Pricing, scan_ms: u128, 
                     c
                 }
                 None => pricing
-                    .find(*h, &e.model, e.provider.as_deref())
+                    .find(&e.model, e.provider.as_deref())
                     .map(|(_, p)| Pricing::cost(&p, &e.usage))
                     .unwrap_or(0.0),
             };

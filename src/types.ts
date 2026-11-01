@@ -1,7 +1,10 @@
 /** Report produced by the Rust backend (see src-tauri/src/report.rs). */
 export interface HarnessInfo {
-  key: HarnessKey;
+  id: string;
+  kind: string;
   label: string;
+  icon: string;
+  color: string;
   found: boolean;
   roots: string[];
   files: number;
@@ -10,7 +13,6 @@ export interface HarnessInfo {
   errors: string[];
 }
 
-export type HarnessKey = 'claude' | 'codex' | 'opencode' | 'dsh';
 
 export interface ModelInfo {
   name: string;
@@ -42,4 +44,31 @@ export interface Report {
   days: DayRow[];
   activity: ActivityRow[];
   sessions: SessionRow[];
+}
+
+/** A configured provider instance (see src-tauri/src/providers/mod.rs). */
+export interface ProviderConfig {
+  id: string;
+  kind: string;
+  name: string;
+  paths: string[];
+  enabled: boolean;
+  color: string | null;
+}
+
+/** A supported harness kind. */
+export interface CatalogEntry {
+  key: string;
+  name: string;
+  icon: string;
+  color: string;
+  location: string;
+  env: string;
+  detected: boolean;
+  default_paths: string[];
+}
+
+export interface ProvidersState {
+  providers: ProviderConfig[];
+  catalog: CatalogEntry[];
 }

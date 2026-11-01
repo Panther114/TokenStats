@@ -5,7 +5,7 @@
 //! messages in `session_message` (JSON `data`, `type` = assistant/user/...), v1 in `message`;
 //! legacy installs keep `storage/message/<session>/<id>.json`. The database is opened
 //! read-only. Forked sessions copy the parent's rows up to `fork_boundary`; those are skipped.
-use crate::model::{project_name, Entry, Harness, HarnessData, Prompt, Usage};
+use crate::model::{project_name, Entry, HarnessData, Prompt, Usage};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -254,7 +254,6 @@ pub fn scan_dir(dir: &Path, out: &mut HarnessData, seen: &mut HashSet<String>) -
         }
         let project = session_dir.get(&m.session).cloned().unwrap_or_else(|| "OpenCode".into());
         out.entries.push(Entry {
-            harness: Harness::OpenCode,
             ts: m.ts,
             model: m.model,
             provider: (!m.provider.is_empty()).then_some(m.provider),
@@ -266,7 +265,7 @@ pub fn scan_dir(dir: &Path, out: &mut HarnessData, seen: &mut HashSet<String>) -
     }
     for (id, ts, sid) in prompts {
         if seen.insert(format!("prompt:{id}")) {
-            out.prompts.push(Prompt { harness: Harness::OpenCode, ts, session: sid });
+            out.prompts.push(Prompt { ts, session: sid });
         }
     }
     Ok(())

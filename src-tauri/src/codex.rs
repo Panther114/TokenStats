@@ -5,7 +5,7 @@
 //! the delta is `total - previous` (zero for repeated events, which are skipped). The model
 //! comes from the most recent `turn_context`. Forked and subagent rollouts replay their
 //! parent's earlier events, which are skipped by delta matching against the parent.
-use crate::model::{parse_ts, project_name, Entry, Harness, HarnessData, Prompt, Usage};
+use crate::model::{parse_ts, project_name, Entry, HarnessData, Prompt, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -334,7 +334,6 @@ pub fn merge(files: &[(PathBuf, FileData)], out: &mut HarnessData) {
             }
             let [input, cached, cw, output, reasoning, _] = e.raw;
             out.entries.push(Entry {
-                harness: Harness::Codex,
                 ts: e.ts,
                 model: e.model.clone(),
                 provider: Some("openai".into()),
@@ -355,7 +354,7 @@ pub fn merge(files: &[(PathBuf, FileData)], out: &mut HarnessData) {
             let forked_at = if fd.parent_id.is_some() { fd.meta_ts.unwrap_or(i64::MIN) } else { i64::MIN };
             for &t in &fd.prompts {
                 if t > forked_at {
-                    out.prompts.push(Prompt { harness: Harness::Codex, ts: t, session: fd.session.clone() });
+                    out.prompts.push(Prompt { ts: t, session: fd.session.clone() });
                 }
             }
         }

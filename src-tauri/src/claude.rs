@@ -5,7 +5,7 @@
 //! Without a `requestId` the key adds the session, and the timestamp unless the id is a
 //! real `msg_`/`resp_` response id. Sidechain replays of a parent message collapse into
 //! the parent. The surviving copy is the non-sidechain one, then the highest token total.
-use crate::model::{parse_ts, project_name, Entry, Harness, HarnessData, Prompt, Usage};
+use crate::model::{parse_ts, project_name, Entry, HarnessData, Prompt, Usage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -54,9 +54,9 @@ pub fn roots() -> Vec<PathBuf> {
     out
 }
 
-pub fn discover(root: &Path) -> Vec<PathBuf> {
+pub fn discover_projects(projects: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    crate::scan::walk(&root.join("projects"), &mut |p| {
+    crate::scan::walk(projects, &mut |p| {
         if p.extension().is_some_and(|e| e == "jsonl") {
             files.push(p.to_path_buf());
         }
@@ -269,7 +269,6 @@ pub fn merge(files: &[(PathBuf, FileData)], out: &mut HarnessData) {
     }
 
     out.entries.extend(kept.into_iter().map(|k| Entry {
-        harness: Harness::Claude,
         ts: k.raw.ts,
         model: k.raw.model,
         provider: None,
@@ -283,7 +282,7 @@ pub fn merge(files: &[(PathBuf, FileData)], out: &mut HarnessData) {
     for (_, fd) in files {
         for (uuid, ts, _) in &fd.prompts {
             if seen.insert(uuid.clone()) {
-                out.prompts.push(Prompt { harness: Harness::Claude, ts: *ts, session: fd.path_session.clone() });
+                out.prompts.push(Prompt { ts: *ts, session: fd.path_session.clone() });
             }
         }
     }

@@ -1,6 +1,6 @@
 [package]
 name = "tokenstats"
-version = "1.0.0"
+version = "1.1.0"
 description = "Unified token usage dashboard for Claude Code, Codex, OpenCode and DeepSeek Harness"
 authors = ["TokenStats"]
 edition = "2021"
@@ -27,7 +27,7 @@ path = "src/cli.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

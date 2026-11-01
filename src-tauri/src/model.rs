@@ -1,37 +1,6 @@
 //! Normalized data model shared by all harness parsers.
 use serde::{Deserialize, Serialize};
 
-/// Harness identifiers. The numeric order is the display order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Harness {
-    Claude = 0,
-    Codex = 1,
-    OpenCode = 2,
-    Dsh = 3,
-}
-
-impl Harness {
-    pub const ALL: [Harness; 4] = [Harness::Claude, Harness::Codex, Harness::OpenCode, Harness::Dsh];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Harness::Claude => "claude",
-            Harness::Codex => "codex",
-            Harness::OpenCode => "opencode",
-            Harness::Dsh => "dsh",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Harness::Claude => "Claude Code",
-            Harness::Codex => "Codex",
-            Harness::OpenCode => "OpenCode",
-            Harness::Dsh => "DeepSeek Harness",
-        }
-    }
-}
-
 /// Token counters in a normalized form:
 /// - `input` excludes cached and cache-write tokens (fresh input only);
 /// - `output` includes reasoning tokens; `reasoning` is informational;
@@ -68,7 +37,6 @@ impl Usage {
 /// One billable model response after harness-specific deduplication.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Entry {
-    pub harness: Harness,
     pub ts: i64,
     pub model: String,
     pub provider: Option<String>,
@@ -82,7 +50,6 @@ pub struct Entry {
 /// One user prompt (a message typed by the user, not a tool result).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Prompt {
-    pub harness: Harness,
     pub ts: i64,
     pub session: String,
 }

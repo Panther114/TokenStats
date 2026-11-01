@@ -5,7 +5,7 @@
 //! `data.usage` (`inputTokens` excludes cache reads; `totalTokens` = input + output + cache
 //! read) and the routed model in `data.message.source`. Seeded child sessions may copy the
 //! parent's history, so responses are deduplicated by message id.
-use crate::model::{project_name, Entry, Harness, HarnessData, Prompt, Usage};
+use crate::model::{project_name, Entry, HarnessData, Prompt, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -38,9 +38,9 @@ pub fn home() -> Option<PathBuf> {
     h.join("sessions").is_dir().then_some(h)
 }
 
-pub fn discover(home: &Path) -> Vec<PathBuf> {
+pub fn discover_sessions(sessions: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    crate::scan::walk(&home.join("sessions"), &mut |p| {
+    crate::scan::walk(sessions, &mut |p| {
         let n = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         if n.starts_with("session") && (n.ends_with(".jsonl") || n.ends_with(".jsonl.zstd")) && !n.contains(".tmp") {
             files.push(p.to_path_buf());
@@ -151,7 +151,6 @@ pub fn merge(files: &[(PathBuf, FileData)], out: &mut HarnessData) {
                 continue;
             }
             out.entries.push(Entry {
-                harness: Harness::Dsh,
                 ts: r.ts,
                 model: if r.model.is_empty() { "unknown".into() } else { r.model.clone() },
                 provider: (!r.provider.is_empty()).then(|| r.provider.clone()),
@@ -166,7 +165,7 @@ pub fn merge(files: &[(PathBuf, FileData)], out: &mut HarnessData) {
         }
         for (id, ts) in &fd.prompts {
             if id.is_empty() || seen_prompts.insert(id.clone()) {
-                out.prompts.push(Prompt { harness: Harness::Dsh, ts: *ts, session: fd.session.clone() });
+                out.prompts.push(Prompt { ts: *ts, session: fd.session.clone() });
             }
         }
     }

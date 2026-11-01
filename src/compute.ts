@@ -1,6 +1,4 @@
-import type { HarnessKey, Report } from './types';
-
-export const HARNESS_KEYS: HarnessKey[] = ['claude', 'codex', 'opencode', 'dsh'];
+import type { Report } from './types';
 
 export type RangeKey = '7d' | '30d' | '90d' | '1y' | 'all';
 export const RANGES: { key: RangeKey; label: string; days: number }[] = [
@@ -35,6 +33,8 @@ export interface Totals {
   longestStreak: number;
   longestSession: number;
   avgSessionMessages: number;
+  /** Share of prompt tokens served from cache: cache read / (fresh input + cache read + cache write). */
+  cacheHitRate: number | null;
 }
 
 /** Per-day series values for one harness (or all). Index = day index. */
@@ -130,7 +130,7 @@ export class Analytics {
       input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, tokens: 0, cost: 0,
       responses: 0, prompts: 0, messages: 0, sessions: 0, activeDays: 0, rangeDays: w.end - w.start + 1,
       peakHour: null, hours: new Array(24).fill(0), favoriteModel: null, favoriteShare: 0,
-      currentStreak: 0, longestStreak: 0, longestSession: 0, avgSessionMessages: 0,
+      currentStreak: 0, longestStreak: 0, longestSession: 0, avgSessionMessages: 0, cacheHitRate: null,
     };
     const byModel = new Map<string, number>();
     for (const [d, hh, m, tok, c, resp] of this.report.days) {
@@ -159,6 +159,8 @@ export class Analytics {
       if (any) active.add(d);
     }
     t.messages = t.responses + t.prompts;
+    const promptTokens = t.input + t.cacheRead + t.cacheWrite;
+    t.cacheHitRate = promptTokens > 0 ? t.cacheRead / promptTokens : null;
     t.activeDays = active.size;
     let peak = -1;
     t.hours.forEach((v, i) => {

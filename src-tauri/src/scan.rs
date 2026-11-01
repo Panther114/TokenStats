@@ -3,14 +3,15 @@
 //! Each transcript file is parsed once and cached (postcard) keyed by path, size and mtime;
 //! a refresh re-parses only new or changed files. Cross-file deduplication runs on the
 //! cached per-file results, which keeps it exact while staying incremental.
-use crate::model::{Harness, HarnessData};
+use crate::model::HarnessData;
+use crate::providers::{self, ProviderConfig};
 use crate::{claude, codex, dsh, opencode};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 #[derive(Clone, Serialize, Deserialize)]
 enum Parsed {
@@ -39,7 +40,7 @@ pub struct Scanner {
 }
 
 pub struct ScanResult {
-    pub data: Vec<(Harness, HarnessData)>,
+    pub data: Vec<HarnessData>,
     pub parsed_files: usize,
     pub cached_files: usize,
     pub millis: u128,
@@ -78,13 +79,6 @@ impl Job {
             Job::Claude(p) | Job::Codex(p, _) | Job::Dsh(p) => p,
         }
     }
-    fn harness(&self) -> Harness {
-        match self {
-            Job::Claude(_) => Harness::Claude,
-            Job::Codex(..) => Harness::Codex,
-            Job::Dsh(_) => Harness::Dsh,
-        }
-    }
     fn run(&self) -> std::io::Result<Parsed> {
         Ok(match self {
             Job::Claude(p) => Parsed::Claude(claude::parse_file(p)?),
@@ -110,99 +104,143 @@ impl Scanner {
         self.dirty = true;
     }
 
-    pub fn scan(&mut self) -> ScanResult {
+    /// Scans the enabled providers; `data[i]` belongs to `providers[i]` (disabled ones stay empty).
+    pub fn scan(&mut self, providers: &[ProviderConfig]) -> ScanResult {
         let started = std::time::Instant::now();
-        let mut roots: HashMap<Harness, Vec<String>> = HashMap::new();
-        let mut jobs: Vec<Job> = Vec::new();
-
-        for r in claude::roots() {
-            roots.entry(Harness::Claude).or_default().push(r.join("projects").display().to_string());
-            jobs.extend(claude::discover(&r).into_iter().map(Job::Claude));
-        }
-        for h in codex::homes() {
-            roots.entry(Harness::Codex).or_default().push(h.display().to_string());
-            jobs.extend(codex::discover(&h).into_iter().map(|(p, s)| Job::Codex(p, s)));
-        }
-        if let Some(h) = dsh::home() {
-            roots.entry(Harness::Dsh).or_default().push(h.join("sessions").display().to_string());
-            jobs.extend(dsh::discover(&h).into_iter().map(Job::Dsh));
+        let mut out: Vec<HarnessData> = providers.iter().map(|_| HarnessData::default()).collect();
+        // (provider index, job) for every cacheable transcript file.
+        let mut jobs: Vec<(usize, Job)> = Vec::new();
+        for (pi, cfg) in providers.iter().enumerate() {
+            if !cfg.enabled {
+                continue;
+            }
+            let roots = providers::roots_for(cfg);
+            let d = &mut out[pi];
+            match cfg.kind.as_str() {
+                "claude" => {
+                    for r in &roots {
+                        let projects = if r.file_name().is_some_and(|n| n == "projects") { r.clone() } else { r.join("projects") };
+                        if projects.is_dir() {
+                            d.roots.push(projects.display().to_string());
+                            jobs.extend(claude::discover_projects(&projects).into_iter().map(|p| (pi, Job::Claude(p))));
+                        }
+                    }
+                }
+                "codex" => {
+                    for h in &roots {
+                        if h.is_dir() {
+                            d.roots.push(h.display().to_string());
+                            jobs.extend(codex::discover(h).into_iter().map(|(p, s)| (pi, Job::Codex(p, s))));
+                        }
+                    }
+                }
+                "dsh" => {
+                    for h in &roots {
+                        let sessions = if h.join("sessions").is_dir() { h.join("sessions") } else { h.clone() };
+                        if sessions.is_dir() {
+                            d.roots.push(sessions.display().to_string());
+                            jobs.extend(dsh::discover_sessions(&sessions).into_iter().map(|p| (pi, Job::Dsh(p))));
+                        }
+                    }
+                }
+                "opencode" => {
+                    let mut seen = HashSet::new();
+                    for dir in &roots {
+                        let dir = if dir.is_file() { dir.parent().map(Path::to_path_buf).unwrap_or_default() } else { dir.clone() };
+                        if !dir.is_dir() {
+                            continue;
+                        }
+                        match opencode::db_path(&dir) {
+                            Some(db) => d.roots.push(db.display().to_string()),
+                            None => d.roots.push(dir.display().to_string()),
+                        }
+                        d.files += 1;
+                        if let Err(e) = opencode::scan_dir(&dir, d, &mut seen) {
+                            d.errors.push(e);
+                        }
+                    }
+                }
+                kind => {
+                    let existing: Vec<PathBuf> = roots.into_iter().filter(|r| r.exists()).collect();
+                    for r in &existing {
+                        d.roots.push(r.display().to_string());
+                    }
+                    if !existing.is_empty() {
+                        providers::scan_simple(kind, &existing, d);
+                    }
+                }
+            }
         }
 
         // Stat every file; reuse cached parses whose size and mtime are unchanged.
         let stats: Vec<(u64, i64)> = jobs
             .par_iter()
-            .map(|j| std::fs::metadata(j.path()).map(|m| (m.len(), mtime_ns(&m))).unwrap_or((0, 0)))
+            .map(|(_, j)| std::fs::metadata(j.path()).map(|m| (m.len(), mtime_ns(&m))).unwrap_or((0, 0)))
             .collect();
         let todo: Vec<usize> = (0..jobs.len())
             .filter(|&i| {
-                let key = jobs[i].path().to_string_lossy();
+                let key = jobs[i].1.path().to_string_lossy();
                 !matches!(self.cache.files.get(key.as_ref()), Some(c) if (c.size, c.mtime) == stats[i])
             })
             .collect();
-        let parsed: Vec<(usize, std::io::Result<Parsed>)> = todo.par_iter().map(|&i| (i, jobs[i].run())).collect();
-        let mut errors: HashMap<Harness, Vec<String>> = HashMap::new();
+        let parsed: Vec<(usize, std::io::Result<Parsed>)> = todo.par_iter().map(|&i| (i, jobs[i].1.run())).collect();
         for (i, res) in parsed {
             match res {
                 Ok(data) => {
                     let (size, mtime) = stats[i];
-                    self.cache.files.insert(jobs[i].path().to_string_lossy().into_owned(), CachedFile { size, mtime, data });
+                    self.cache.files.insert(jobs[i].1.path().to_string_lossy().into_owned(), CachedFile { size, mtime, data });
                     self.dirty = true;
                 }
-                Err(e) => errors.entry(jobs[i].harness()).or_default().push(format!("{}: {e}", jobs[i].path().display())),
+                Err(e) => out[jobs[i].0].errors.push(format!("{}: {e}", jobs[i].1.path().display())),
             }
         }
-        // Forget files that no longer exist.
-        let live: HashSet<String> = jobs.iter().map(|j| j.path().to_string_lossy().into_owned()).collect();
+        // Forget files that no longer exist (or belong to removed providers).
+        let live: HashSet<String> = jobs.iter().map(|(_, j)| j.path().to_string_lossy().into_owned()).collect();
         let before = self.cache.files.len();
         self.cache.files.retain(|k, _| live.contains(k));
         if self.cache.files.len() != before {
             self.dirty = true;
         }
 
-        let mut cl: Vec<(PathBuf, claude::FileData)> = Vec::new();
-        let mut cx: Vec<(PathBuf, codex::FileData)> = Vec::new();
-        let mut ds: Vec<(PathBuf, dsh::FileData)> = Vec::new();
-        for j in &jobs {
-            let key = j.path().to_string_lossy();
-            match self.cache.files.get(key.as_ref()).map(|c| &c.data) {
-                Some(Parsed::Claude(d)) => cl.push((j.path().to_path_buf(), d.clone())),
-                Some(Parsed::Codex(d)) => cx.push((j.path().to_path_buf(), d.clone())),
-                Some(Parsed::Dsh(d)) => ds.push((j.path().to_path_buf(), d.clone())),
-                None => {}
-            }
-        }
-
-        let mut out: Vec<(Harness, HarnessData)> = Vec::new();
-        let mut hd = HarnessData { files: cl.len(), ..Default::default() };
-        claude::merge(&cl, &mut hd);
-        out.push((Harness::Claude, hd));
-        let mut hd = HarnessData { files: cx.len(), ..Default::default() };
-        codex::merge(&cx, &mut hd);
-        out.push((Harness::Codex, hd));
-        let mut hd = HarnessData::default();
-        let mut seen = HashSet::new();
-        for dir in opencode::data_dirs() {
-            if let Some(db) = opencode::db_path(&dir) {
-                hd.roots.push(db.display().to_string());
-                hd.files += 1;
-            } else {
-                hd.roots.push(dir.display().to_string());
-            }
-            if let Err(e) = opencode::scan_dir(&dir, &mut hd, &mut seen) {
-                hd.errors.push(e);
-            }
-        }
-        out.push((Harness::OpenCode, hd));
-        let mut hd = HarnessData { files: ds.len(), ..Default::default() };
-        dsh::merge(&ds, &mut hd);
-        out.push((Harness::Dsh, hd));
-
-        for (h, d) in out.iter_mut() {
-            if let Some(r) = roots.remove(h) {
-                d.roots.extend(r);
-            }
-            if let Some(e) = errors.remove(h) {
-                d.errors.extend(e);
+        for (pi, cfg) in providers.iter().enumerate() {
+            let paths: Vec<&Path> = jobs.iter().filter(|(p, _)| *p == pi).map(|(_, j)| j.path()).collect();
+            let d = &mut out[pi];
+            let cached = |p: &Path| self.cache.files.get(p.to_string_lossy().as_ref()).map(|c| &c.data);
+            match cfg.kind.as_str() {
+                "claude" => {
+                    let files: Vec<(PathBuf, claude::FileData)> = paths
+                        .iter()
+                        .filter_map(|p| match cached(p) {
+                            Some(Parsed::Claude(f)) => Some((p.to_path_buf(), f.clone())),
+                            _ => None,
+                        })
+                        .collect();
+                    d.files += files.len();
+                    claude::merge(&files, d);
+                }
+                "codex" => {
+                    let files: Vec<(PathBuf, codex::FileData)> = paths
+                        .iter()
+                        .filter_map(|p| match cached(p) {
+                            Some(Parsed::Codex(f)) => Some((p.to_path_buf(), f.clone())),
+                            _ => None,
+                        })
+                        .collect();
+                    d.files += files.len();
+                    codex::merge(&files, d);
+                }
+                "dsh" => {
+                    let files: Vec<(PathBuf, dsh::FileData)> = paths
+                        .iter()
+                        .filter_map(|p| match cached(p) {
+                            Some(Parsed::Dsh(f)) => Some((p.to_path_buf(), f.clone())),
+                            _ => None,
+                        })
+                        .collect();
+                    d.files += files.len();
+                    dsh::merge(&files, d);
+                }
+                _ => {}
             }
         }
         self.save();

@@ -5,7 +5,7 @@
 //! provider-prefixed exact key, exact key, family aliases, then a boundary-aware fuzzy match
 //! that picks the longest matching key (the ccusage rule: `gpt-5` must not match `gpt-5.4`,
 //! but `mimo-v2.5-free` matches `mimo-v2.5`).
-use crate::model::{Harness, Usage};
+use crate::model::Usage;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -109,17 +109,17 @@ impl Pricing {
 
     /// Resolves a model (with an optional harness provider id) to a price entry.
     /// Returns the matched table key alongside the price.
-    pub fn find(&self, harness: Harness, model: &str, provider: Option<&str>) -> Option<(String, Price)> {
+    pub fn find(&self, model: &str, provider: Option<&str>) -> Option<(String, Price)> {
         let memo_key = (model.to_string(), provider.unwrap_or("").to_string());
         if let Some(hit) = self.memo.lock().unwrap().get(&memo_key) {
             return hit.clone();
         }
-        let found = self.find_uncached(harness, model, provider);
+        let found = self.find_uncached(model, provider);
         self.memo.lock().unwrap().insert(memo_key, found.clone());
         found
     }
 
-    fn find_uncached(&self, _harness: Harness, model: &str, provider: Option<&str>) -> Option<(String, Price)> {
+    fn find_uncached(&self, model: &str, provider: Option<&str>) -> Option<(String, Price)> {
         let provider = provider.unwrap_or("").to_ascii_lowercase();
         if LOCAL_PROVIDERS.contains(&provider.as_str()) {
             return None;
@@ -136,7 +136,7 @@ impl Pricing {
         // Free promotional variants are priced as their paid counterparts.
         if let Some(base) = m.strip_suffix("-free") {
             let prov = (!provider.is_empty()).then_some(provider.as_str());
-            if let Some(found) = self.find_uncached(_harness, base, prov) {
+            if let Some(found) = self.find_uncached(base, prov) {
                 if found.1.input > 0.0 || found.1.output > 0.0 {
                     return Some(found);
                 }
@@ -163,7 +163,7 @@ impl Pricing {
         }
         // Model ids that already carry a provider prefix ("anthropic/claude-...").
         if let Some((_, bare)) = m.split_once('/') {
-            if let Some(found) = self.find_uncached(_harness, bare, None) {
+            if let Some(found) = self.find_uncached(bare, None) {
                 return Some(found);
             }
         }
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn lookups() {
         let p = Pricing::embedded();
-        let f = |m: &str, prov: Option<&str>| p.find(Harness::Claude, m, prov).map(|x| x.0);
+        let f = |m: &str, prov: Option<&str>| p.find(m, prov).map(|x| x.0);
         assert_eq!(f("claude-sonnet-5-5", None).as_deref(), Some("claude-sonnet-5-5"));
         assert_eq!(f("muse-spark-1.3-contributor", Some("opencode-go")).as_deref(), Some("opencode_go/muse-spark-1.3-contributor"));
         assert_eq!(f("deepseek-flash", Some("deepseek-account")).as_deref(), Some("deepseek/deepseek-flash"));

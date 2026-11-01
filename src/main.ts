@@ -1,9 +1,10 @@
 import './styles.css';
-import { appReady, loadReport, onTrayRefresh, refreshPricing } from './api';
+import { appReady, appVersion, getProviders, loadReport, refreshPricing, resetProviders, setProviders } from './api';
 import { cumulativeChart, heatmap, hideTip, hourBars, stackedBars, type Series } from './charts';
-import { Analytics, HARNESS_KEYS, RANGES, rangeWindow, type Metric, type ModelRow, type RangeKey, type Totals, type Window } from './compute';
+import { Analytics, RANGES, rangeWindow, type Metric, type ModelRow, type RangeKey, type Totals, type Window } from './compute';
 import { compact, dateShort, duration, esc, hourLabel, hourRange, int, pct, rate, relativeTime, usd } from './format';
-import type { HarnessKey, Report } from './types';
+import { icon } from './icons';
+import type { CatalogEntry, ProviderConfig, Report } from './types';
 
 /* --------------------------------------------------------------- settings */
 
@@ -12,13 +13,12 @@ interface Settings {
   range: RangeKey;
   metric: Metric;
   weekStart: 0 | 1;
-  colors: Partial<Record<HarnessKey, string>>;
   heatmapColor: string | null;
   pricingCheckedAt: number;
 }
 
-const DEFAULTS: Settings = { theme: 'system', range: '30d', metric: 'tokens', weekStart: 0, colors: {}, heatmapColor: null, pricingCheckedAt: 0 };
-const STORE_KEY = 'tokenstats.settings';
+const DEFAULTS: Settings = { theme: 'system', range: '30d', metric: 'tokens', weekStart: 1, heatmapColor: null, pricingCheckedAt: 0 };
+const STORE_KEY = 'tokenstats.settings.v2';
 
 function loadSettings(): Settings {
   try {
@@ -38,9 +38,8 @@ function saveSettings(): void {
 
 const settings = loadSettings();
 
-const GLYPHS: Record<HarnessKey, string> = { claude: 'CC', codex: 'CX', opencode: 'OC', dsh: 'DS' };
 const HEATMAP_PRESETS: { name: string; color: string | null }[] = [
-  { name: 'Harness colors', color: null },
+  { name: 'Provider colors', color: null },
   { name: 'Contribution green', color: '#2da44e' },
   { name: 'Ember', color: '#eb6834' },
   { name: 'Ocean', color: '#2a78d6' },
@@ -57,23 +56,27 @@ let loading = false;
 let lastLoad = 0;
 let loadError: string | null = null;
 let modelFilter: number | null = null;
+let providers: ProviderConfig[] = [];
+let catalog: CatalogEntry[] = [];
+let version = '';
+let providerError = '';
+let editing: string | null = null;
 let modelSort: { key: keyof ModelRow; dir: 1 | -1 } = { key: 'cost', dir: -1 };
 
 const app = document.getElementById('app')!;
 
 function color(h: number): string {
-  const key = HARNESS_KEYS[h];
-  return settings.colors[key] ?? getComputedStyle(document.documentElement).getPropertyValue(`--c-${key}`).trim();
+  return report?.harnesses[h]?.color ?? '#888888';
 }
 
 function applyTheme(): void {
   const root = document.documentElement;
   if (settings.theme === 'system') delete root.dataset.theme;
   else root.dataset.theme = settings.theme;
-  for (const k of HARNESS_KEYS) {
-    if (settings.colors[k]) root.style.setProperty(`--c-${k}`, settings.colors[k]!);
-    else root.style.removeProperty(`--c-${k}`);
-  }
+}
+
+function providerIcon(id: string, c: string): string {
+  return `<span class="picon" style="--c:${c}">${icon(id)}</span>`;
 }
 
 /* ------------------------------------------------------------------ icons */
@@ -98,7 +101,7 @@ function render(): void {
   }
   const w = rangeWindow(settings.range, A.cal);
   const all = A.totals(-1, w);
-  const per = HARNESS_KEYS.map((_, i) => A!.totals(i, w));
+  const per = report.harnesses.map((_, i) => A!.totals(i, w));
   app.innerHTML = `${topbar()}<main>
     ${overview(all, w)}
     ${harnessSection(per)}
@@ -115,7 +118,7 @@ function render(): void {
     </section>
     <section class="card card-pad">
       <div class="card-title"><h3>Daily tokens by harness</h3><span class="hint">${w.end - w.start + 1 > 120 ? 'Weekly totals' : 'Daily totals'}</span></div>
-      <div class="legend">${HARNESS_KEYS.map((_, i) => `<span><i style="background:${color(i)}"></i>${esc(report!.harnesses[i].label)}</span>`).join('')}</div>
+      <div class="legend">${report.harnesses.map((h, i) => `<span><i style="background:${color(i)}"></i>${esc(h.label)}</span>`).join('')}</div>
       <div class="chart-host" id="daily-chart" style="margin-top:8px"></div>
     </section>
     ${modelsSection(w)}
@@ -186,21 +189,20 @@ function harnessSection(per: Totals[]): string {
   const metricSel = `<div class="segmented small" role="group" aria-label="Heatmap metric">${(['tokens', 'cost', 'messages'] as Metric[])
     .map((m) => `<button data-metric="${m}" aria-pressed="${settings.metric === m}">${m === 'cost' ? 'Cost' : m === 'tokens' ? 'Tokens' : 'Messages'}</button>`)
     .join('')}</div>`;
-  const cards = HARNESS_KEYS.map((k, i) => {
-    const info = report!.harnesses[i];
+  const cards = report!.harnesses.map((info, i) => {
     const t = per[i];
-    const c = settings.heatmapColor ?? `var(--c-${k})`;
+    const c = settings.heatmapColor ?? info.color;
     const path = info.roots[0] ?? 'Not found';
     const stat = (label: string, v: string, title = '') => `<div><div class="k">${label}</div><div class="v num" title="${esc(title || v)}">${v}</div></div>`;
     return `<article class="card harness ${info.found ? '' : 'empty'}" style="--c:${c}">
       <div class="harness-head">
         <div class="harness-name">
-          <span class="glyph" style="--c:var(--c-${k})">${GLYPHS[k]}</span>
+          ${providerIcon(info.icon, info.color)}
           <div style="min-width:0"><h3>${esc(info.label)}</h3><div class="path" title="${esc(info.roots.join('\n'))}">${esc(path)}</div></div>
         </div>
         <div class="harness-total"><div class="big num">${compact(t.tokens)}</div><div class="small num">${usd(t.cost)} · ${compact(t.messages)} msgs</div></div>
       </div>
-      <div class="heatmap-wrap" id="hm-${k}"></div>
+      <div class="heatmap-wrap" id="hm-${i}"></div>
       <div class="harness-foot">
         <span>${info.found ? `${int(info.files)} ${info.files === 1 ? 'source' : 'files'} · ${int(info.responses)} responses total` : 'No data directory found'}${info.errors.length ? ` · ${info.errors.length} read errors` : ''}</span>
         <span class="legend-scale">Less<span></span><i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i><span></span>More</span>
@@ -208,6 +210,7 @@ function harnessSection(per: Totals[]): string {
       <div class="mini-stats">
         ${stat('Sessions', int(t.sessions))}
         ${stat('Messages', compact(t.messages), `${int(t.prompts)} prompts, ${int(t.responses)} responses`)}
+        ${stat('Cache hit rate', t.cacheHitRate === null ? '–' : pct(t.cacheHitRate), 'Average share of prompt tokens read from cache: cache read / (input + cache read + cache write)')}
         ${stat('Active days', `${t.activeDays}`)}
         ${stat('Peak hour', t.peakHour === null ? '–' : hourLabel(t.peakHour))}
         ${stat('Top model', esc(t.favoriteModel ?? '–'))}
@@ -216,10 +219,10 @@ function harnessSection(per: Totals[]): string {
   }).join('');
   return `<section>
     <div class="section-head">
-      <div><h2>Harnesses</h2><p class="sub">Daily ${settings.metric} per harness · cells outside the selected range are dimmed</p></div>
+      <div><h2>Providers</h2><p class="sub">Daily ${settings.metric} per provider · cells outside the selected range are dimmed</p></div>
       ${metricSel}
     </div>
-    <div class="harness-grid">${cards}</div>
+    <div class="harness-grid">${cards || '<div class="card card-pad notice">No providers are enabled. Add one in Settings.</div>'}</div>
   </section>`;
 }
 
@@ -236,8 +239,8 @@ function modelsSection(w: Window): string {
     key
       ? `<th class="sortable" data-sort="${key}" ${modelSort.key === key ? `aria-sort="${modelSort.dir === 1 ? 'ascending' : 'descending'}"` : ''} title="${title}">${label}${modelSort.key === key ? (modelSort.dir === 1 ? ' ↑' : ' ↓') : ''}</th>`
       : `<th title="${title}">${label}</th>`;
-  const filters = [`<button data-mfilter="" aria-pressed="${modelFilter === null}">All harnesses</button>`]
-    .concat(HARNESS_KEYS.map((key, i) => `<button data-mfilter="${i}" aria-pressed="${modelFilter === i}" style="--c:var(--c-${key})"><i></i>${esc(report!.harnesses[i].label)}</button>`))
+  const filters = [`<button data-mfilter="" aria-pressed="${modelFilter === null}">All providers</button>`]
+    .concat(report!.harnesses.map((h, i) => `<button data-mfilter="${i}" aria-pressed="${modelFilter === i}" style="--c:${h.color}"><i></i>${esc(h.label)}</button>`))
     .join('');
   const body = rows.length
     ? rows
@@ -252,7 +255,7 @@ function modelsSection(w: Window): string {
               : `<span class="muted" title="No public API list price is published for this model (free, preview or local model).">No public price</span>`;
           return `<tr>
             <td title="${esc(pricedAs)}"><div class="model-name">${esc(r.name)}</div>${sub ? `<div class="model-sub">${esc(sub)}</div>` : ''}</td>
-            <td style="text-align:left"><span class="chips">${r.harnesses.map((h) => `<span class="chip" style="--c:var(--c-${HARNESS_KEYS[h]})">${esc(report!.harnesses[h].label)}</span>`).join('')}</span></td>
+            <td style="text-align:left"><span class="chips">${r.harnesses.map((h) => `<span class="chip" style="--c:${color(h)}">${esc(report!.harnesses[h].label)}</span>`).join('')}</span></td>
             <td>${int(r.responses)}</td>
             <td title="${int(r.input)}">${compact(r.input)}</td>
             <td title="${int(r.output)}">${compact(r.output)}</td>
@@ -273,7 +276,7 @@ function modelsSection(w: Window): string {
     <div class="card">
       <div class="table-scroll"><table class="models">
         <thead><tr>
-          ${th('Model', 'name')}<th style="text-align:left">Harness</th>${th('Responses', 'responses')}${th('Input', 'input', 'Fresh (uncached) input tokens')}${th('Output', 'output', 'Output tokens, including reasoning')}${th('Cache read', 'cacheRead')}${th('Cache write', 'cacheWrite')}${th('Total', 'tokens')}<th style="text-align:left" title="USD per million tokens: input / output · cache read / cache write">Price / 1M</th>${th('Cost', 'cost')}
+          ${th('Model', 'name')}<th style="text-align:left">Provider</th>${th('Responses', 'responses')}${th('Input', 'input', 'Fresh (uncached) input tokens')}${th('Output', 'output', 'Output tokens, including reasoning')}${th('Cache read', 'cacheRead')}${th('Cache write', 'cacheWrite')}${th('Total', 'tokens')}<th style="text-align:left" title="USD per million tokens: input / output · cache read / cache write">Price / 1M</th>${th('Cost', 'cost')}
         </tr></thead>
         <tbody>${body}</tbody>
       </table></div>
@@ -302,20 +305,15 @@ function drawer(): string {
       <div class="setting"><h4>Heatmap color</h4><p>One color for every heatmap, or each harness in its own color.</p>
         <div class="presets">${HEATMAP_PRESETS.map(
           (p) => `<button class="preset" data-preset="${p.color ?? ''}" aria-pressed="${settings.heatmapColor === p.color}"><span class="swatches">${
-            p.color ? [0.3, 0.55, 0.8, 1].map((o) => `<i style="background:${p.color};opacity:${o}"></i>`).join('') : HARNESS_KEYS.map((k) => `<i style="background:var(--c-${k})"></i>`).join('')
+            p.color ? [0.3, 0.55, 0.8, 1].map((o) => `<i style="background:${p.color};opacity:${o}"></i>`).join('') : (report?.harnesses ?? []).slice(0, 4).map((h) => `<i style="background:${h.color}"></i>`).join('')
           }</span>${p.name}</button>`,
         ).join('')}
           <label class="preset" title="Custom heatmap color"><input type="color" id="custom-heat" value="${settings.heatmapColor ?? '#2da44e'}">Custom</label>
         </div>
       </div>
-      <div class="setting"><h4>Harness colors</h4><p>Used by charts, chips and the per-harness heatmaps.</p>
-        <div class="color-rows">${HARNESS_KEYS.map(
-          (k, i) => `<div class="color-row"><label><input type="color" data-hcolor="${k}" value="${toHex(color(i))}">${esc(report?.harnesses[i]?.label ?? k)}</label></div>`,
-        ).join('')}</div>
-        <div class="btn-row" style="margin-top:10px"><button class="text-btn" id="reset-colors">Reset colors</button></div>
-      </div>
+      ${providersSetting()}
       <div class="setting"><h4>Week starts on</h4>
-        <div class="segmented" role="group"><button data-week="0" aria-pressed="${settings.weekStart === 0}">Sunday</button><button data-week="1" aria-pressed="${settings.weekStart === 1}">Monday</button></div>
+        <div class="segmented" role="group"><button data-week="1" aria-pressed="${settings.weekStart === 1}">Monday</button><button data-week="0" aria-pressed="${settings.weekStart === 0}">Sunday</button></div>
       </div>
       <div class="setting"><h4>Pricing</h4><p>List prices from LiteLLM, with long-context tiers from models.dev. Refreshed automatically once a day.</p>
         <div class="btn-row"><button class="text-btn" id="update-pricing">Update prices now</button><span class="small-note" id="pricing-note">Snapshot ${esc(report?.pricing_updated ?? '–')}</span></div>
@@ -323,6 +321,7 @@ function drawer(): string {
       <div class="setting"><h4>Data</h4><p>Only new or changed log files are parsed on refresh. A full rescan rebuilds the cache.</p>
         <div class="btn-row"><button class="text-btn" id="full-rescan">Full rescan</button></div>
       </div>
+      <div class="setting"><h4>About</h4><p>TokenStats ${esc(version)} · token usage from local coding-agent logs, read-only. Prices from LiteLLM and models.dev; icons from lobe-icons.</p></div>
     </div>
   </aside>`;
 }
@@ -339,8 +338,8 @@ function toHex(c: string): string {
 function drawCharts(w: Window, all: Totals): void {
   if (!report || !A) return;
   const firstDay = report.days.length ? Math.min(...report.days.map((d) => d[0])) : A.cal.today;
-  HARNESS_KEYS.forEach((k, i) => {
-    const host = document.getElementById(`hm-${k}`);
+  report.harnesses.forEach((_, i) => {
+    const host = document.getElementById(`hm-${i}`);
     if (!host) return;
     const s = A!.daySeries(i);
     const values = s[settings.metric];
@@ -362,7 +361,7 @@ function drawCharts(w: Window, all: Totals): void {
   });
   const slice = (arr: Float64Array) => Array.from(arr.subarray(w.start, w.end + 1));
   const series = (m: 'cost' | 'tokens'): Series[] =>
-    HARNESS_KEYS.map((_, i) => ({ label: report!.harnesses[i].label, color: color(i), values: slice(A!.daySeries(i)[m]) }));
+    report!.harnesses.map((h, i) => ({ label: h.label, color: color(i), values: slice(A!.daySeries(i)[m]) }));
   const cum = document.getElementById('cum-chart');
   if (cum) cumulativeChart(cum, A.cal, w, series('cost'), (v) => usd(v));
   const daily = document.getElementById('daily-chart');
@@ -436,21 +435,7 @@ function bindChrome(): void {
     saveSettings();
     rerenderKeepingDrawer();
   });
-  app.querySelectorAll<HTMLInputElement>('[data-hcolor]').forEach((inp) =>
-    inp.addEventListener('change', () => {
-      settings.colors[inp.dataset.hcolor as HarnessKey] = inp.value;
-      saveSettings();
-      applyTheme();
-      rerenderKeepingDrawer();
-    }),
-  );
-  document.getElementById('reset-colors')?.addEventListener('click', () => {
-    settings.colors = {};
-    settings.heatmapColor = null;
-    saveSettings();
-    applyTheme();
-    rerenderKeepingDrawer();
-  });
+  bindProviders(rerenderKeepingDrawer);
   app.querySelectorAll<HTMLButtonElement>('[data-week]').forEach((b) =>
     b.addEventListener('click', () => {
       settings.weekStart = Number(b.dataset.week) as 0 | 1;
@@ -533,7 +518,8 @@ setInterval(() => {
 applyTheme();
 render();
 requestAnimationFrame(() => appReady());
-onTrayRefresh(() => refresh(false));
+appVersion().then((v) => (version = v));
+loadProviders();
 refresh(false).then(async () => {
   if (Date.now() - settings.pricingCheckedAt > 86_400_000) {
     updatePricing().catch(() => {
@@ -541,3 +527,93 @@ refresh(false).then(async () => {
     });
   }
 });
+
+/* --------------------------------------------------------------- providers */
+
+async function loadProviders(): Promise<void> {
+  try {
+    const st = await getProviders();
+    providers = st.providers;
+    catalog = st.catalog;
+  } catch (e) {
+    providerError = String(e);
+  }
+}
+
+function providersSetting(): string {
+  const kindOf = (k: string) => catalog.find((c) => c.key === k);
+  const rows = providers
+    .map((p) => {
+      const k = kindOf(p.kind);
+      const c = p.color ?? k?.color ?? '#888888';
+      return `<div class="prov-row" data-pid="${esc(p.id)}">
+        ${providerIcon(k?.icon ?? 'custom', c)}
+        <div class="prov-main"><input class="prov-name" data-pname value="${esc(p.name)}" aria-label="Provider name">
+          <input class="prov-path" data-ppath value="${esc(p.paths.join('; '))}" placeholder="${esc(k?.location ?? 'Default location')}" aria-label="Custom data path"></div>
+        <input type="color" data-pcolor value="${toHex(c)}" title="Color">
+        <label class="switch" title="Enabled"><input type="checkbox" data-penabled ${p.enabled ? 'checked' : ''}></label>
+        <button class="text-btn" data-pdelete title="Remove provider">Remove</button>
+      </div>`;
+    })
+    .join('');
+  const options = catalog
+    .map((c) => `<option value="${esc(c.key)}">${esc(c.name)}${c.detected ? ' (detected)' : ''}</option>`)
+    .join('');
+  return `<div class="setting"><h4>Providers</h4><p>Each provider reads one harness's local logs. Leave the path empty to use the default location.</p>
+    <div class="prov-list">${rows || '<p class="muted">No providers configured.</p>'}</div>
+    <div class="btn-row" style="margin-top:10px"><select id="add-kind">${options}</select><button class="text-btn" id="add-provider">Add</button>
+      <button class="text-btn primary" id="save-providers">Save and rescan</button><button class="text-btn" id="reset-providers">Reset</button></div>
+    ${providerError ? `<div class="small-note">${esc(providerError)}</div>` : ''}
+  </div>`;
+}
+
+function readProviderRows(): void {
+  document.querySelectorAll<HTMLElement>('.prov-row').forEach((row) => {
+    const p = providers.find((x) => x.id === row.dataset.pid);
+    if (!p) return;
+    p.name = (row.querySelector('[data-pname]') as HTMLInputElement).value.trim() || p.name;
+    const path = (row.querySelector('[data-ppath]') as HTMLInputElement).value;
+    p.paths = path.split(';').map((x) => x.trim()).filter(Boolean);
+    p.color = (row.querySelector('[data-pcolor]') as HTMLInputElement).value;
+    p.enabled = (row.querySelector('[data-penabled]') as HTMLInputElement).checked;
+  });
+}
+
+function bindProviders(rerender: () => void): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-pdelete]').forEach((b) =>
+    b.addEventListener('click', () => {
+      readProviderRows();
+      const id = (b.closest('.prov-row') as HTMLElement).dataset.pid;
+      providers = providers.filter((p) => p.id !== id);
+      rerender();
+    }),
+  );
+  document.getElementById('add-provider')?.addEventListener('click', () => {
+    readProviderRows();
+    const kind = (document.getElementById('add-kind') as HTMLSelectElement).value;
+    const k = catalog.find((c) => c.key === kind);
+    if (!k) return;
+    let id = kind;
+    for (let n = 2; providers.some((p) => p.id === id); n++) id = `${kind}-${n}`;
+    providers.push({ id, kind, name: k.name, paths: [], enabled: true, color: null });
+    rerender();
+  });
+  document.getElementById('save-providers')?.addEventListener('click', async () => {
+    readProviderRows();
+    try {
+      await setProviders(providers);
+      providerError = '';
+      openDrawer(false);
+      refresh(false);
+    } catch (e) {
+      providerError = String(e);
+      rerender();
+    }
+  });
+  document.getElementById('reset-providers')?.addEventListener('click', async () => {
+    providers = await resetProviders();
+    await loadProviders();
+    refresh(false);
+  });
+  void editing;
+}

@@ -1,4 +1,4 @@
-import type { Report } from './types';
+import type { ProviderConfig, ProvidersState, Report } from './types';
 import { compactLiteLLM, compactModelsDev } from './pricing-compact.js';
 
 const inTauri = '__TAURI_INTERNALS__' in window;
@@ -17,14 +17,29 @@ export async function loadReport(full = false): Promise<Report> {
   return JSON.parse(await invoke<string>('get_report', { full }));
 }
 
-export async function appReady(): Promise<void> {
-  if (inTauri) await invoke('app_ready');
+/** Configured providers and the catalog; outside Tauri it reads /providers.json. */
+export async function getProviders(): Promise<ProvidersState> {
+  if (!inTauri) return (await fetch(`/providers.json?t=${Date.now()}`)).json();
+  return invoke<ProvidersState>('get_providers');
 }
 
-export async function onTrayRefresh(cb: () => void): Promise<void> {
+export async function setProviders(list: ProviderConfig[]): Promise<void> {
   if (!inTauri) return;
-  const ev = await import('@tauri-apps/api/event');
-  await ev.listen('tokenstats://refresh', cb);
+  await invoke('set_providers', { list });
+}
+
+export async function resetProviders(): Promise<ProviderConfig[]> {
+  if (!inTauri) return [];
+  return invoke<ProviderConfig[]>('reset_providers');
+}
+
+export async function appVersion(): Promise<string> {
+  if (!inTauri) return 'dev';
+  return invoke<string>('app_version');
+}
+
+export async function appReady(): Promise<void> {
+  if (inTauri) await invoke('app_ready');
 }
 
 const LITELLM_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json';

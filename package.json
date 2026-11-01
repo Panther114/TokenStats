@@ -1,0 +1,21 @@
+{
+  "name": "tokenstats",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "TokenStats: unified token usage dashboard for Claude Code, Codex, OpenCode and DeepSeek Harness",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "tauri": "tauri",
+    "pricing": "node scripts/build-pricing.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.5"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4"
+  }
+}

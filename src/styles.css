@@ -1096,3 +1096,178 @@ select {
 .drawer {
   width: min(460px, 100vw);
 }
+
+/* ------------------------------------------------- version and date range */
+.brand .version {
+  font: 500 10.5px/1 var(--font);
+  color: var(--text-3);
+  letter-spacing: 0;
+  margin-left: -4px;
+  align-self: flex-end;
+  padding-bottom: 2px;
+}
+.date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.date-range input[type='date'] {
+  background: var(--surface-3);
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  color-scheme: light dark;
+}
+.card-title .spacer {
+  flex: 1;
+}
+
+/* ============================================================ visual polish */
+:root {
+  --brand: #e07a52;
+  --brand-2: #f0a35e;
+  --glow: rgba(224, 122, 82, 0.1);
+  --card-hi: rgba(255, 255, 255, 0.9);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --glow: rgba(224, 122, 82, 0.13);
+    --card-hi: rgba(255, 255, 255, 0.035);
+  }
+}
+:root[data-theme='dark'] {
+  --glow: rgba(224, 122, 82, 0.13);
+  --card-hi: rgba(255, 255, 255, 0.035);
+}
+
+body {
+  background:
+    radial-gradient(900px 420px at 12% -120px, var(--glow), transparent 70%),
+    radial-gradient(700px 360px at 92% -160px, color-mix(in oklab, var(--glow) 60%, transparent), transparent 70%),
+    var(--bg);
+  background-repeat: no-repeat;
+}
+html {
+  background: var(--bg);
+}
+
+/* top bar */
+.topbar {
+  /* Opaque on purpose: backdrop blur repaints every scroll frame without GPU compositing. */
+  background: var(--bg);
+  box-shadow: 0 1px 0 var(--border), 0 8px 24px -16px rgba(0, 0, 0, 0.5);
+}
+.brand > span:first-of-type {
+  background: linear-gradient(90deg, var(--text) 0%, var(--text) 55%, var(--brand) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.segmented button[aria-pressed='true'] {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), inset 0 -2px 0 var(--brand);
+}
+
+/* section headings */
+.section-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-head h2::before {
+  content: '';
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--brand-2), var(--brand));
+}
+
+/* cards */
+.card {
+  background: linear-gradient(180deg, var(--card-hi), transparent 120px), var(--surface);
+  transition: border-color 0.15s;
+}
+.card:hover {
+  border-color: var(--border-strong);
+}
+.card-title {
+  align-items: center;
+}
+
+/* KPI strip */
+.kpi {
+  position: relative;
+  background: linear-gradient(180deg, var(--card-hi), transparent 90px), var(--surface);
+}
+.kpi:hover {
+  background: var(--surface-2);
+}
+.kpi .label {
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+.kpi:first-child,
+.kpi:nth-child(2) {
+  background:
+    radial-gradient(260px 120px at 0% 0%, var(--glow), transparent 70%),
+    linear-gradient(180deg, var(--card-hi), transparent 90px),
+    var(--surface);
+}
+.kpi:first-child .value,
+.kpi:nth-child(2) .value {
+  font-size: 25px;
+  background: linear-gradient(90deg, var(--brand-2), var(--brand));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* provider cards: accent bar and tint in the provider color */
+.harness {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(420px 160px at 100% 0%, color-mix(in oklab, var(--c) 11%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--card-hi), transparent 120px),
+    var(--surface);
+}
+.harness::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--c), color-mix(in oklab, var(--c) 10%, transparent));
+}
+.harness:hover {
+  border-color: color-mix(in oklab, var(--c) 45%, var(--border));
+}
+.harness.empty::before {
+  opacity: 0.25;
+}
+.harness .picon {
+  border-color: color-mix(in oklab, var(--c) 35%, var(--border));
+  background: color-mix(in oklab, var(--c) 12%, var(--surface-2));
+}
+.harness-total .big {
+  font-size: 19px;
+}
+
+/* models table */
+table.models tbody tr {
+  transition: background 0.12s;
+}
+table.models tbody tr:hover {
+  background: color-mix(in oklab, var(--brand) 6%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .kpi,
+  table.models tbody tr {
+    transition: none;
+  }
+}
+.card.kpis {
+  background: var(--border);
+}

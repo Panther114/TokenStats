@@ -1,13 +1,30 @@
 import type { Report } from './types';
 
-export type RangeKey = '7d' | '30d' | '90d' | '1y' | 'all';
+export type RangeKey = '7d' | '30d' | '90d' | '1y' | 'all' | 'custom';
 export const RANGES: { key: RangeKey; label: string; days: number }[] = [
   { key: '7d', label: '7D', days: 7 },
   { key: '30d', label: '30D', days: 30 },
   { key: '90d', label: '90D', days: 90 },
   { key: '1y', label: '1Y', days: 365 },
   { key: 'all', label: 'All', days: Infinity },
+  { key: 'custom', label: 'Custom', days: NaN },
 ];
+
+/** Inclusive custom date range as local `YYYY-MM-DD` strings. */
+export interface CustomRange {
+  from: string;
+  to: string;
+}
+
+export function parseDay(s: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+}
+
+export function isoDay(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 export type Metric = 'tokens' | 'cost' | 'messages';
 
@@ -59,6 +76,8 @@ export interface ModelRow {
   tokens: number;
   cost: number;
   responses: number;
+  /** cache read / (input + cache read + cache write); null without prompt tokens. */
+  cacheHitRate: number | null;
 }
 
 /** Local-date helpers anchored on the report's epoch day. */
@@ -88,8 +107,18 @@ export interface Window {
   end: number;
 }
 
-export function rangeWindow(range: RangeKey, cal: Calendar): Window {
-  const r = RANGES.find((x) => x.key === range)!;
+export function rangeWindow(range: RangeKey, cal: Calendar, custom?: CustomRange): Window {
+  if (range === 'custom') {
+    const a = custom && parseDay(custom.from);
+    const b = custom && parseDay(custom.to);
+    let start = a ? cal.indexOf(a) : cal.today - 29;
+    let end = b ? cal.indexOf(b) : cal.today;
+    if (start > end) [start, end] = [end, start];
+    end = Math.min(Math.max(end, 0), cal.today);
+    start = Math.min(Math.max(start, 0), end);
+    return { start, end };
+  }
+  const r = RANGES.find((x) => x.key === range) ?? RANGES[1];
   const end = cal.today;
   const start = r.days === Infinity ? 0 : Math.max(0, end - r.days + 1);
   return { start: Math.min(start, end), end };
@@ -224,7 +253,7 @@ export class Analytics {
       if (!r) {
         r = {
           name: info.name, harnesses: [], providers: [], priceKey: info.price_key, price: info.price, long: info.long,
-          storedCost: false, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0, responses: 0,
+          storedCost: false, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0, responses: 0, cacheHitRate: null,
         };
         rows.set(key, r);
       }
@@ -244,7 +273,11 @@ export class Analytics {
       r.cost += c;
       r.responses += resp;
     }
-    for (const r of rows.values()) r.harnesses.sort();
+    for (const r of rows.values()) {
+      r.harnesses.sort();
+      const prompt = r.input + r.cacheRead + r.cacheWrite;
+      r.cacheHitRate = prompt > 0 ? r.cacheRead / prompt : null;
+    }
     return [...rows.values()];
   }
 }

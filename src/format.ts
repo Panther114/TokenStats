@@ -1,4 +1,5 @@
-const compactFmt = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+const compactFmt = new Intl.NumberFormat('en-US', { notation: 'compact', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const moneyFmt = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 const intFmt = new Intl.NumberFormat('en-US');
 
 export function compact(n: number): string {
@@ -15,7 +16,7 @@ export function usd(n: number, precise = false): string {
   if (!Number.isFinite(n)) return '–';
   if (n === 0) return '$0';
   if (n < 0.01) return '<$0.01';
-  if (!precise && n >= 10_000) return '$' + compactFmt.format(n);
+  if (!precise && n >= 10_000) return '$' + moneyFmt.format(n);
   const digits = n >= 1000 ? 0 : 2;
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
@@ -61,6 +62,12 @@ export function pct(n: number): string {
   if (!Number.isFinite(n)) return '–';
   if (n > 0 && n < 0.001) return '<0.1%';
   return (n * 100).toFixed(n >= 0.1 ? 0 : 1) + '%';
+}
+
+/** Percentage with exactly two decimal places. */
+export function pct2(n: number | null): string {
+  if (n === null || !Number.isFinite(n)) return '–';
+  return (n * 100).toFixed(2) + '%';
 }
 
 export function esc(s: string): string {

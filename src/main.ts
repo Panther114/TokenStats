@@ -1,8 +1,8 @@
 import './styles.css';
 import { appReady, appVersion, getProviders, loadReport, refreshPricing, resetProviders, setProviders } from './api';
-import { cumulativeChart, heatmap, hideTip, hourBars, stackedBars, type Series } from './charts';
-import { Analytics, RANGES, rangeWindow, type Metric, type ModelRow, type RangeKey, type Totals, type Window } from './compute';
-import { compact, dateShort, duration, esc, hourLabel, hourRange, int, pct, rate, relativeTime, usd } from './format';
+import { cumulativeChart, heatmap, hideTip, hourBars, stackedBars, widthHint, type Series } from './charts';
+import { Analytics, RANGES, isoDay, parseDay, rangeWindow, type CustomRange, type Metric, type ModelRow, type RangeKey, type Totals, type Window } from './compute';
+import { compact, dateShort, duration, esc, hourLabel, hourRange, int, pct, pct2, rate, relativeTime, usd } from './format';
 import { icon } from './icons';
 import type { CatalogEntry, ProviderConfig, Report } from './types';
 
@@ -12,12 +12,14 @@ interface Settings {
   theme: 'system' | 'light' | 'dark';
   range: RangeKey;
   metric: Metric;
+  dailyMetric: 'tokens' | 'cost';
+  custom: CustomRange | null;
   weekStart: 0 | 1;
   heatmapColor: string | null;
   pricingCheckedAt: number;
 }
 
-const DEFAULTS: Settings = { theme: 'system', range: '30d', metric: 'tokens', weekStart: 1, heatmapColor: null, pricingCheckedAt: 0 };
+const DEFAULTS: Settings = { theme: 'system', range: '30d', metric: 'tokens', dailyMetric: 'tokens', custom: null, weekStart: 1, heatmapColor: null, pricingCheckedAt: 0 };
 const STORE_KEY = 'tokenstats.settings.v2';
 
 function loadSettings(): Settings {
@@ -90,6 +92,10 @@ const ICON = {
 
 /* ---------------------------------------------------------------- render */
 
+function currentWindow(): Window {
+  return rangeWindow(settings.range, A!.cal, settings.custom ?? undefined);
+}
+
 function render(): void {
   hideTip();
   if (!report || !A) {
@@ -99,7 +105,7 @@ function render(): void {
     bindChrome();
     return;
   }
-  const w = rangeWindow(settings.range, A.cal);
+  const w = currentWindow();
   const all = A.totals(-1, w);
   const per = report.harnesses.map((_, i) => A!.totals(i, w));
   app.innerHTML = `${topbar()}<main>
@@ -116,16 +122,34 @@ function render(): void {
         <div class="hour-meta"><span>Peak <b>${all.peakHour === null ? '–' : hourRange(all.peakHour)}</b></span><span class="num">${int(all.messages)} messages</span></div>
       </div>
     </section>
-    <section class="card card-pad">
-      <div class="card-title"><h3>Daily tokens by harness</h3><span class="hint">${w.end - w.start + 1 > 120 ? 'Weekly totals' : 'Daily totals'}</span></div>
-      <div class="legend">${report.harnesses.map((h, i) => `<span><i style="background:${color(i)}"></i>${esc(h.label)}</span>`).join('')}</div>
-      <div class="chart-host" id="daily-chart" style="margin-top:8px"></div>
-    </section>
+    ${dailySection(w)}
     ${modelsSection(w)}
     ${footer()}
   </main>${drawer()}`;
   bindChrome();
   drawCharts(w, all);
+}
+
+function dailySection(w: Window): string {
+  return `<section class="card card-pad" id="daily-section">
+      <div class="card-title"><h3>${settings.dailyMetric === 'cost' ? 'Daily API-equivalent cost by harness' : 'Daily tokens by harness'}</h3><span class="hint">${w.end - w.start + 1 > 120 ? 'Weekly totals' : 'Daily totals'}</span>
+        <div class="spacer"></div>
+        <div class="segmented small" role="group" aria-label="Daily chart metric">${(['tokens', 'cost'] as const)
+          .map((m) => `<button data-daily="${m}" aria-pressed="${settings.dailyMetric === m}">${m === 'cost' ? 'Cost' : 'Tokens'}</button>`)
+          .join('')}</div></div>
+      <div class="legend">${report!.harnesses.map((h, i) => `<span><i style="background:${color(i)}"></i>${esc(h.label)}</span>`).join('')}</div>
+      <div class="chart-host" id="daily-chart" style="margin-top:8px"></div>
+    </section>`;
+}
+
+/** Replaces one section in place, so a local toggle does not rebuild the whole page. */
+function swap(id: string, html: string): void {
+  const old = document.getElementById(id);
+  if (!old) return render();
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html.trim();
+  hideTip();
+  old.replaceWith(tpl.content);
 }
 
 function topbar(): string {
@@ -135,20 +159,34 @@ function topbar(): string {
       ? `<span class="status" title="${report.parsed_files} files parsed, ${report.cached_files} from cache, ${report.scan_ms} ms"><span class="dot"></span>Updated ${relativeTime(lastLoad)} · ${int(report.parsed_files + report.cached_files)} files · ${report.scan_ms} ms</span>`
       : '';
   return `<header class="topbar">
-    <div class="brand">${ICON.logo}<span>TokenStats</span></div>
+    <div class="brand">${ICON.logo}<span>TokenStats</span>${version ? `<span class="version num">v${esc(version)}</span>` : ''}</div>
     ${status}
     <div class="spacer"></div>
     <div class="segmented" role="group" aria-label="Time range">${RANGES.map(
       (r) => `<button data-range="${r.key}" aria-pressed="${settings.range === r.key}">${r.label}</button>`,
     ).join('')}</div>
+    ${settings.range === 'custom' ? customInputs() : ''}
     <button class="icon-btn ${loading ? 'spin' : ''}" id="refresh" title="Refresh (rescan changed files)" aria-label="Refresh">${ICON.refresh}</button>
     <button class="icon-btn" id="open-settings" title="Settings" aria-label="Settings">${ICON.settings}</button>
   </header>`;
 }
 
+function customInputs(): string {
+  const w = A ? currentWindow() : null;
+  const from = w ? isoDay(A!.cal.date(w.start)) : settings.custom?.from ?? '';
+  const to = w ? isoDay(A!.cal.date(w.end)) : settings.custom?.to ?? '';
+  const max = A ? isoDay(A.cal.date(A.cal.today)) : '';
+  return `<div class="date-range" role="group" aria-label="Custom date range">
+    <input type="date" id="range-from" value="${from}" max="${max}" aria-label="From">
+    <span class="muted">–</span>
+    <input type="date" id="range-to" value="${to}" max="${max}" aria-label="To">
+  </div>`;
+}
+
 function rangeText(w: Window): string {
-  const r = RANGES.find((x) => x.key === settings.range)!;
-  const label = r.key === 'all' ? 'All time' : `Last ${r.days === 365 ? '12 months' : `${r.days} days`}`;
+  const r = RANGES.find((x) => x.key === settings.range) ?? RANGES[1];
+  const days = w.end - w.start + 1;
+  const label = r.key === 'all' ? 'All time' : r.key === 'custom' ? `Custom · ${days} ${days === 1 ? 'day' : 'days'}` : `Last ${r.days === 365 ? '12 months' : `${r.days} days`}`;
   return `${label} · ${dateShort(A!.cal.date(w.start))} – ${dateShort(A!.cal.date(w.end))}`;
 }
 
@@ -210,14 +248,14 @@ function harnessSection(per: Totals[]): string {
       <div class="mini-stats">
         ${stat('Sessions', int(t.sessions))}
         ${stat('Messages', compact(t.messages), `${int(t.prompts)} prompts, ${int(t.responses)} responses`)}
-        ${stat('Cache hit rate', t.cacheHitRate === null ? '–' : pct(t.cacheHitRate), 'Average share of prompt tokens read from cache: cache read / (input + cache read + cache write)')}
+        ${stat('Cache hit rate', pct2(t.cacheHitRate), 'Average share of prompt tokens read from cache: cache read / (input + cache read + cache write)')}
         ${stat('Active days', `${t.activeDays}`)}
         ${stat('Peak hour', t.peakHour === null ? '–' : hourLabel(t.peakHour))}
         ${stat('Top model', esc(t.favoriteModel ?? '–'))}
       </div>
     </article>`;
   }).join('');
-  return `<section>
+  return `<section id="providers-section">
     <div class="section-head">
       <div><h2>Providers</h2><p class="sub">Daily ${settings.metric} per provider · cells outside the selected range are dimmed</p></div>
       ${metricSel}
@@ -231,7 +269,8 @@ function modelsSection(w: Window): string {
   const totalTokens = rows.reduce((a, r) => a + r.tokens, 0) || 1;
   const k = modelSort.key;
   rows.sort((a, b) => {
-    const x = a[k], y = b[k];
+    const nul = (v: unknown) => (v === null ? -1 : v);
+    const x = nul(a[k]), y = nul(b[k]);
     if (typeof x === 'number' && typeof y === 'number') return (x - y) * modelSort.dir;
     return String(x).localeCompare(String(y)) * modelSort.dir;
   });
@@ -261,14 +300,15 @@ function modelsSection(w: Window): string {
             <td title="${int(r.output)}">${compact(r.output)}</td>
             <td title="${int(r.cacheRead)}">${compact(r.cacheRead)}</td>
             <td title="${int(r.cacheWrite)}">${compact(r.cacheWrite)}</td>
+            <td>${pct2(r.cacheHitRate)}</td>
             <td><div class="share" title="${int(r.tokens)} tokens"><span>${compact(r.tokens)}</span><span class="bar"><span style="width:${((r.tokens / totalTokens) * 100).toFixed(1)}%"></span></span></div></td>
             <td style="text-align:left">${rates}</td>
             <td><b>${usd(r.cost)}</b></td>
           </tr>`;
         })
         .join('')
-    : `<tr><td colspan="10" class="muted" style="text-align:center;padding:28px">No model usage in this range.</td></tr>`;
-  return `<section>
+    : `<tr><td colspan="11" class="muted" style="text-align:center;padding:28px">No model usage in this range.</td></tr>`;
+  return `<section id="models-section">
     <div class="section-head">
       <div><h2>Models</h2><p class="sub">Token usage and API-equivalent cost per model · rates in USD per million tokens</p></div>
       <div class="filter-row">${filters}</div>
@@ -276,7 +316,7 @@ function modelsSection(w: Window): string {
     <div class="card">
       <div class="table-scroll"><table class="models">
         <thead><tr>
-          ${th('Model', 'name')}<th style="text-align:left">Provider</th>${th('Responses', 'responses')}${th('Input', 'input', 'Fresh (uncached) input tokens')}${th('Output', 'output', 'Output tokens, including reasoning')}${th('Cache read', 'cacheRead')}${th('Cache write', 'cacheWrite')}${th('Total', 'tokens')}<th style="text-align:left" title="USD per million tokens: input / output · cache read / cache write">Price / 1M</th>${th('Cost', 'cost')}
+          ${th('Model', 'name')}<th style="text-align:left">Provider</th>${th('Responses', 'responses')}${th('Input', 'input', 'Fresh (uncached) input tokens')}${th('Output', 'output', 'Output tokens, including reasoning')}${th('Cache read', 'cacheRead')}${th('Cache write', 'cacheWrite')}${th('Cache hit rate', 'cacheHitRate', 'Cache read / (input + cache read + cache write)')}${th('Total', 'tokens')}<th style="text-align:left" title="USD per million tokens: input / output · cache read / cache write">Price / 1M</th>${th('Cost', 'cost')}
         </tr></thead>
         <tbody>${body}</tbody>
       </table></div>
@@ -337,9 +377,38 @@ function toHex(c: string): string {
 
 function drawCharts(w: Window, all: Totals): void {
   if (!report || !A) return;
+  // One layout pass for every chart host, before any of them is written.
+  for (const id of ['cum-chart', 'daily-chart', 'hour-chart']) {
+    const h = document.getElementById(id);
+    if (h) widthHint.set(h, h.clientWidth);
+  }
+  drawHeatmaps(w);
+  drawDaily(w);
+  const cum = document.getElementById('cum-chart');
+  if (cum) {
+    const series: Series[] = report.harnesses.map((h, i) => ({ label: h.label, color: color(i), values: Array.from(A!.daySeries(i).cost.subarray(w.start, w.end + 1)) }));
+    cumulativeChart(cum, A.cal, w, series, (v) => usd(v));
+  }
+  const hours = document.getElementById('hour-chart');
+  if (hours) hourBars(hours, all.hours, all.peakHour, 'var(--text-2)');
+}
+
+function drawDaily(w: Window): void {
+  const daily = document.getElementById('daily-chart');
+  if (!daily || !report || !A) return;
+  const m = settings.dailyMetric;
+  const series: Series[] = report.harnesses.map((h, i) => ({ label: h.label, color: color(i), values: Array.from(A!.daySeries(i)[m].subarray(w.start, w.end + 1)) }));
+  stackedBars(daily, A.cal, w, series, m === 'cost' ? (v) => usd(v) : (v) => compact(v));
+}
+
+function drawHeatmaps(w: Window): void {
+  if (!report || !A) return;
   const firstDay = report.days.length ? Math.min(...report.days.map((d) => d[0])) : A.cal.today;
+  // Measure every host before drawing any, so the heatmaps cost one layout instead of one each.
+  const hosts = report.harnesses.map((_, i) => document.getElementById(`hm-${i}`));
+  const widths = hosts.map((h) => h?.clientWidth ?? 0);
   report.harnesses.forEach((_, i) => {
-    const host = document.getElementById(`hm-${i}`);
+    const host = hosts[i];
     if (!host) return;
     const s = A!.daySeries(i);
     const values = s[settings.metric];
@@ -350,6 +419,7 @@ function drawCharts(w: Window, all: Totals): void {
       metric: settings.metric,
       weekStart: settings.weekStart,
       firstDay,
+      width: widths[i],
       detail: (d) => {
         const rows: string[] = [];
         if (settings.metric !== 'tokens') rows.push(`<div class="tt-row">Tokens<b>${compact(s.tokens[d])}</b></div>`);
@@ -359,15 +429,6 @@ function drawCharts(w: Window, all: Totals): void {
       },
     });
   });
-  const slice = (arr: Float64Array) => Array.from(arr.subarray(w.start, w.end + 1));
-  const series = (m: 'cost' | 'tokens'): Series[] =>
-    report!.harnesses.map((h, i) => ({ label: h.label, color: color(i), values: slice(A!.daySeries(i)[m]) }));
-  const cum = document.getElementById('cum-chart');
-  if (cum) cumulativeChart(cum, A.cal, w, series('cost'), (v) => usd(v));
-  const daily = document.getElementById('daily-chart');
-  if (daily) stackedBars(daily, A.cal, w, series('tokens'), (v) => compact(v));
-  const hours = document.getElementById('hour-chart');
-  if (hours) hourBars(hours, all.hours, all.peakHour, 'var(--text-2)');
 }
 
 /* ------------------------------------------------------------------ events */
@@ -379,33 +440,16 @@ function openDrawer(open: boolean): void {
 }
 
 function bindChrome(): void {
-  app.querySelectorAll<HTMLButtonElement>('[data-range]').forEach((b) =>
-    b.addEventListener('click', () => {
-      settings.range = b.dataset.range as RangeKey;
-      saveSettings();
-      render();
-    }),
-  );
-  app.querySelectorAll<HTMLButtonElement>('[data-metric]').forEach((b) =>
-    b.addEventListener('click', () => {
-      settings.metric = b.dataset.metric as Metric;
-      saveSettings();
-      render();
-    }),
-  );
-  app.querySelectorAll<HTMLButtonElement>('[data-mfilter]').forEach((b) =>
-    b.addEventListener('click', () => {
-      modelFilter = b.dataset.mfilter === '' ? null : Number(b.dataset.mfilter);
-      render();
-    }),
-  );
-  app.querySelectorAll<HTMLElement>('[data-sort]').forEach((th) =>
-    th.addEventListener('click', () => {
-      const key = th.dataset.sort as keyof ModelRow;
-      modelSort = modelSort.key === key ? { key, dir: (modelSort.dir * -1) as 1 | -1 } : { key, dir: key === 'name' ? 1 : -1 };
-      render();
-    }),
-  );
+  const onDate = () => {
+    const f = (document.getElementById('range-from') as HTMLInputElement | null)?.value ?? '';
+    const t = (document.getElementById('range-to') as HTMLInputElement | null)?.value ?? '';
+    if (!parseDay(f) || !parseDay(t)) return;
+    settings.custom = f <= t ? { from: f, to: t } : { from: t, to: f };
+    saveSettings();
+    render();
+  };
+  document.getElementById('range-from')?.addEventListener('change', onDate);
+  document.getElementById('range-to')?.addEventListener('change', onDate);
   document.getElementById('refresh')?.addEventListener('click', () => refresh(false));
   document.getElementById('open-settings')?.addEventListener('click', () => openDrawer(true));
   document.getElementById('close-settings')?.addEventListener('click', () => openDrawer(false));
@@ -463,6 +507,43 @@ function bindChrome(): void {
   });
 }
 
+/** One delegated listener for the dashboard toggles; each updates only what it affects. */
+app.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-range],[data-daily],[data-metric],[data-mfilter],[data-sort]');
+  if (!t || !report || !A) return;
+  const d = t.dataset;
+  if (d.range !== undefined) {
+    const next = d.range as RangeKey;
+    // Entering custom mode starts from the range currently shown.
+    if (next === 'custom' && !settings.custom) {
+      const w = currentWindow();
+      settings.custom = { from: isoDay(A.cal.date(w.start)), to: isoDay(A.cal.date(w.end)) };
+    }
+    settings.range = next;
+    saveSettings();
+    render();
+  } else if (d.daily !== undefined) {
+    settings.dailyMetric = d.daily as Settings['dailyMetric'];
+    saveSettings();
+    const w = currentWindow();
+    swap('daily-section', dailySection(w));
+    drawDaily(w);
+  } else if (d.metric !== undefined) {
+    settings.metric = d.metric as Metric;
+    saveSettings();
+    const w = currentWindow();
+    swap('providers-section', harnessSection(report.harnesses.map((_, i) => A!.totals(i, w))));
+    drawHeatmaps(w);
+  } else if (d.mfilter !== undefined) {
+    modelFilter = d.mfilter === '' ? null : Number(d.mfilter);
+    swap('models-section', modelsSection(currentWindow()));
+  } else if (d.sort !== undefined) {
+    const key = d.sort as keyof ModelRow;
+    modelSort = modelSort.key === key ? { key, dir: (modelSort.dir * -1) as 1 | -1 } : { key, dir: key === 'name' ? 1 : -1 };
+    swap('models-section', modelsSection(currentWindow()));
+  }
+});
+
 /* ----------------------------------------------------------------- loading */
 
 async function refresh(full: boolean, quiet = false): Promise<void> {
@@ -490,10 +571,15 @@ async function updatePricing(): Promise<void> {
 }
 
 let resizeTimer = 0;
-new ResizeObserver(() => {
+let observedWidth = 0;
+new ResizeObserver((entries) => {
+  // Only a width change alters chart geometry; height changes come from re-renders.
+  const wNow = Math.round(entries[0].contentRect.width);
+  if (wNow === observedWidth) return;
+  observedWidth = wNow;
   clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
-    if (report && A) drawCharts(rangeWindow(settings.range, A.cal), A.totals(-1, rangeWindow(settings.range, A.cal)));
+    if (report && A) drawCharts(currentWindow(), A.totals(-1, currentWindow()));
   }, 120);
 }).observe(document.body);
 
@@ -518,7 +604,10 @@ setInterval(() => {
 applyTheme();
 render();
 requestAnimationFrame(() => appReady());
-appVersion().then((v) => (version = v));
+appVersion().then((v) => {
+  version = v;
+  render();
+});
 loadProviders();
 refresh(false).then(async () => {
   if (Date.now() - settings.pricingCheckedAt > 86_400_000) {

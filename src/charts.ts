@@ -36,6 +36,13 @@ function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, 
   return e;
 }
 
+/** Widths measured by the caller in one pass, so drawing several charts forces one layout, not one each. */
+export const widthHint = new WeakMap<Element, number>();
+
+function hostWidth(host: HTMLElement): number {
+  return widthHint.get(host) ?? host.clientWidth;
+}
+
 export function metricValue(metric: Metric, v: number): string {
   if (metric === 'cost') return usd(v);
   if (metric === 'messages') return `${int(v)} messages`;
@@ -54,6 +61,8 @@ export interface HeatmapOptions {
   weekStart: 0 | 1;
   /** First day index worth showing (start of data). */
   firstDay: number;
+  /** Host width measured by the caller, so several heatmaps share one layout pass. */
+  width?: number;
 }
 
 /** Quantile thresholds over the non-zero values; returns the level (0-4) for a value. */
@@ -66,12 +75,13 @@ function levelScale(values: number[]): (v: number) => number {
 }
 
 export function heatmap(host: HTMLElement, o: HeatmapOptions): void {
+  const measured = o.width ?? hostWidth(host);
   host.replaceChildren();
   const today = o.cal.today;
   const cell = 10, gap = 3, step = cell + gap, left = 28, top = 16;
   // Fill the card width at a fixed cell size (GitHub style), ending this week; extend
   // further back (cells shrink) only when the selected range needs more weeks.
-  const fitWeeks = Math.max(8, Math.floor(((host.clientWidth || 600) - left) / step));
+  const fitWeeks = Math.max(8, Math.floor(((measured || 600) - left) / step));
   const needWeeks = Math.ceil((today - Math.max(0, Math.min(o.window.start, o.firstDay)) + 7) / 7);
   const weeks = Math.max(fitWeeks, Math.min(needWeeks, 106));
   const endDow = (o.cal.date(today).getDay() - o.weekStart + 7) % 7;
@@ -86,13 +96,11 @@ export function heatmap(host: HTMLElement, o: HeatmapOptions): void {
   for (let d = Math.max(0, spanStart); d <= today; d++) visible.push(o.values[d] ?? 0);
   const level = levelScale(visible);
 
-  // Weekday labels.
+  // Markup is assembled as one string: far cheaper than one DOM call per cell.
+  const parts: string[] = [];
   const names = o.weekStart === 1 ? ['Mon', '', 'Wed', '', 'Fri', '', ''] : ['', 'Mon', '', 'Wed', '', 'Fri', ''];
   names.forEach((n, i) => {
-    if (!n) return;
-    const t = el('text', { x: 0, y: top + i * step + cell - 1.5, class: 'hm-label' });
-    t.textContent = n;
-    svg.appendChild(t);
+    if (n) parts.push(`<text x="0" y="${top + i * step + cell - 1.5}" class="hm-label">${n}</text>`);
   });
 
   let lastMonth = -1;
@@ -107,9 +115,7 @@ export function heatmap(host: HTMLElement, o: HeatmapOptions): void {
         if (m !== lastMonth && date.getDate() <= 7) {
           const x = left + w * step;
           if (x - lastLabelX > 26) {
-            const t = el('text', { x, y: 11, class: 'hm-label' });
-            t.textContent = monthShort(m);
-            svg.appendChild(t);
+            parts.push(`<text x="${x}" y="11" class="hm-label">${monthShort(m)}</text>`);
             lastLabelX = x;
           }
           lastMonth = m;
@@ -117,18 +123,12 @@ export function heatmap(host: HTMLElement, o: HeatmapOptions): void {
       }
       const v = d >= 0 ? o.values[d] ?? 0 : 0;
       const inRange = d >= o.window.start && d <= o.window.end;
-      const rect = el('rect', {
-        x: left + w * step,
-        y: top + r * step,
-        width: cell,
-        height: cell,
-        rx: 2.5,
-        class: `hm-cell l${level(v)}${inRange ? '' : ' out'}${d === today ? ' today' : ''}`,
-      });
-      rect.dataset.day = String(d);
-      svg.appendChild(rect);
+      parts.push(
+        `<rect x="${left + w * step}" y="${top + r * step}" width="${cell}" height="${cell}" rx="2.5" class="hm-cell l${level(v)}${inRange ? '' : ' out'}${d === today ? ' today' : ''}" data-day="${d}"/>`,
+      );
     }
   }
+  svg.innerHTML = parts.join('');
 
   svg.addEventListener('mousemove', (e) => {
     const t = e.target as SVGElement;
@@ -176,7 +176,7 @@ function xTicks(cal: Calendar, w: Window, n: number): number[] {
 
 export function cumulativeChart(host: HTMLElement, cal: Calendar, w: Window, series: Series[], format: (v: number) => string): void {
   host.replaceChildren();
-  const width = Math.max(320, host.clientWidth || 800);
+  const width = Math.max(320, hostWidth(host) || 800);
   const height = 210;
   const m = { l: 52, r: 124, t: 24, b: 22 };
   const days = w.end - w.start + 1;
@@ -207,6 +207,15 @@ export function cumulativeChart(host: HTMLElement, cal: Calendar, w: Window, ser
   for (const s of cum) {
     if (!s.values.some((v) => v > 0)) continue;
     const pts = s.values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    // Soft gradient area under each line.
+    const gid = `cum-fill-${ends.length}`;
+    const grad = el('linearGradient', { id: gid, x1: 0, x2: 0, y1: 0, y2: 1 });
+    grad.append(el('stop', { offset: '0%', 'stop-color': s.color, 'stop-opacity': 0.22 }), el('stop', { offset: '100%', 'stop-color': s.color, 'stop-opacity': 0 }));
+    const defs = el('defs', {});
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+    const base = y(0).toFixed(1);
+    svg.appendChild(el('polygon', { points: `${x(0).toFixed(1)},${base} ${pts} ${x(s.values.length - 1).toFixed(1)},${base}`, fill: `url(#${gid})`, stroke: 'none' }));
     svg.appendChild(el('polyline', { points: pts, fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
     ends.push({ y: y(s.values[s.values.length - 1]), s });
   }
@@ -254,7 +263,7 @@ export function cumulativeChart(host: HTMLElement, cal: Calendar, w: Window, ser
 
 export function stackedBars(host: HTMLElement, cal: Calendar, w: Window, series: Series[], format: (v: number) => string): void {
   host.replaceChildren();
-  const width = Math.max(320, host.clientWidth || 800);
+  const width = Math.max(320, hostWidth(host) || 800);
   const height = 170;
   const m = { l: 52, r: 8, t: 8, b: 22 };
   const days = w.end - w.start + 1;
@@ -323,7 +332,7 @@ export function stackedBars(host: HTMLElement, cal: Calendar, w: Window, series:
 
 export function hourBars(host: HTMLElement, hours: number[], peak: number | null, color: string): void {
   host.replaceChildren();
-  const width = Math.max(260, host.clientWidth || 400);
+  const width = Math.max(260, hostWidth(host) || 400);
   const height = 178;
   const m = { l: 8, r: 8, t: 8, b: 20 };
   const max = Math.max(1, ...hours);

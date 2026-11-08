@@ -1,6 +1,8 @@
 import type { ProviderConfig, ProvidersState, Report } from './types';
 import { compactLiteLLM, compactModelsDev } from './pricing-compact.js';
 
+declare const __APP_VERSION__: string;
+
 const inTauri = '__TAURI_INTERNALS__' in window;
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -34,7 +36,7 @@ export async function resetProviders(): Promise<ProviderConfig[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!inTauri) return 'dev';
+  if (!inTauri) return __APP_VERSION__;
   return invoke<string>('app_version');
 }
 

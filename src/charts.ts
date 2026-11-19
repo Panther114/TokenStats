@@ -1,5 +1,5 @@
 import type { Calendar, Metric, Window } from './compute';
-import { compact, dateLong, dateShort, esc, hourRange, int, monthShort, usd } from './format';
+import { compact, dateLong, dateShort, esc, hourRange, int, monthShort, rate, usd } from './format';
 
 const SVG = 'http://www.w3.org/2000/svg';
 
@@ -165,7 +165,7 @@ export interface Series {
 
 function xTicks(cal: Calendar, w: Window, n: number): number[] {
   const len = w.end - w.start;
-  if (len <= 0) return [w.start];
+  if (len <= 0 || n <= 1) return [w.start];
   const count = Math.min(n, len + 1);
   const out: number[] = [];
   for (let i = 0; i < count; i++) out.push(Math.round(w.start + (len * i) / (count - 1)));
@@ -174,41 +174,55 @@ function xTicks(cal: Calendar, w: Window, n: number): number[] {
 
 /* -------------------------------------------------- cumulative line chart */
 
-export function cumulativeChart(host: HTMLElement, cal: Calendar, w: Window, series: Series[], format: (v: number) => string): void {
+export function cumulativeChart(host: HTMLElement, cal: Calendar, w: Window, series: Series[], scale: 'linear' | 'log'): void {
   host.replaceChildren();
-  const width = Math.max(320, hostWidth(host) || 800);
+  const width = hostWidth(host) || 800;
   const height = 210;
-  const m = { l: 52, r: 124, t: 24, b: 22 };
+  const m = { l: 60, r: 24, t: 12, b: 22 };
   const days = w.end - w.start + 1;
   const cum = series.map((s) => {
     let acc = 0;
     return { ...s, values: s.values.map((v) => (acc += v)) };
+  }).filter((s) => s.values.some((v) => v > 0));
+  const peak = Math.max(0, ...cum.map((s) => s.values[days - 1]));
+  const max = niceMax(peak);
+  const plotW = width - m.l - m.r;
+  const bottom = height - m.b;
+  const x = (i: number) => m.l + (days <= 1 ? 0.5 : i / (days - 1)) * plotW;
+  let y = (v: number) => bottom - (v / max) * (bottom - m.t);
+  let ticks = Array.from({ length: 5 }, (_, i) => (max * i) / 4);
+  if (scale === 'log' && peak > 0) {
+    const min = Math.min(...cum.map((s) => s.values.find((v) => v > 0)!));
+    const low = Math.floor(Math.log10(min));
+    const high = Math.max(low + 1, Math.ceil(Math.log10(peak)));
+    const step = Math.ceil((high - low) / 4);
+    const positiveBottom = bottom - 24;
+    // Reserve a separate baseline for zero, which has no logarithm.
+    y = (v) => v <= 0 ? bottom : positiveBottom - ((Math.log10(v) - low) / (high - low)) * (positiveBottom - m.t);
+    ticks = [0];
+    for (let exp = high; exp >= low; exp -= step) ticks.push(10 ** exp);
+  }
+  const svg = el('svg', {
+    viewBox: `0 0 ${width} ${height}`, width, height, class: 'chart',
+    role: 'img', 'aria-label': `Cumulative API-equivalent spend, ${scale === 'log' ? 'logarithmic' : 'linear'} scale`,
   });
-  const max = niceMax(Math.max(0, ...cum.map((s) => s.values[s.values.length - 1] ?? 0)));
-  const x = (i: number) => m.l + (days <= 1 ? 0 : (i / (days - 1)) * (width - m.l - m.r));
-  const y = (v: number) => m.t + (1 - v / max) * (height - m.t - m.b);
-  const svg = el('svg', { viewBox: `0 0 ${width} ${height}`, width, height, class: 'chart' });
 
-  for (let i = 0; i <= 4; i++) {
-    const v = (max * i) / 4;
-    svg.appendChild(el('line', { x1: m.l, x2: width - m.r, y1: y(v), y2: y(v), class: i === 0 ? 'axis' : 'grid' }));
+  for (const v of ticks) {
+    svg.appendChild(el('line', { x1: m.l, x2: width - m.r, y1: y(v), y2: y(v), class: v === 0 ? 'axis' : 'grid' }));
     const t = el('text', { x: m.l - 8, y: y(v) + 4, class: 'tick', 'text-anchor': 'end' });
-    t.textContent = format(v);
+    t.textContent = v > 0 && v < 0.01 ? rate(v) : usd(v);
     svg.appendChild(t);
   }
-  for (const d of xTicks(cal, w, 6)) {
+  for (const d of xTicks(cal, w, Math.min(6, Math.floor(plotW / 48) + 1))) {
     const t = el('text', { x: x(d - w.start), y: height - 6, class: 'tick', 'text-anchor': 'middle' });
     t.textContent = dateShort(cal.date(d));
     svg.appendChild(t);
   }
 
-  // Lines, then direct end labels de-overlapped vertically.
-  const ends: { y: number; s: (typeof cum)[number] }[] = [];
-  for (const s of cum) {
-    if (!s.values.some((v) => v > 0)) continue;
+  for (const [i, s] of cum.entries()) {
     const pts = s.values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
     // Soft gradient area under each line.
-    const gid = `cum-fill-${ends.length}`;
+    const gid = `cum-fill-${i}`;
     const grad = el('linearGradient', { id: gid, x1: 0, x2: 0, y1: 0, y2: 1 });
     grad.append(el('stop', { offset: '0%', 'stop-color': s.color, 'stop-opacity': 0.22 }), el('stop', { offset: '100%', 'stop-color': s.color, 'stop-opacity': 0 }));
     const defs = el('defs', {});
@@ -217,55 +231,48 @@ export function cumulativeChart(host: HTMLElement, cal: Calendar, w: Window, ser
     const base = y(0).toFixed(1);
     svg.appendChild(el('polygon', { points: `${x(0).toFixed(1)},${base} ${pts} ${x(s.values.length - 1).toFixed(1)},${base}`, fill: `url(#${gid})`, stroke: 'none' }));
     svg.appendChild(el('polyline', { points: pts, fill: 'none', stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
-    ends.push({ y: y(s.values[s.values.length - 1]), s });
-  }
-  ends.sort((a, b) => a.y - b.y);
-  if (ends.length) ends[0].y = Math.max(ends[0].y, m.t + 10);
-  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 24) ends[i].y = ends[i - 1].y + 24;
-  const overflow = ends.length ? ends[ends.length - 1].y - (height - m.b) : 0;
-  if (overflow > 0) ends.forEach((e) => (e.y -= overflow));
-  for (const e of ends) {
-    const lx = width - m.r + 10;
-    svg.appendChild(el('circle', { cx: x(days - 1), cy: y(e.s.values[e.s.values.length - 1]), r: 3.5, fill: e.s.color, class: 'end-dot' }));
-    const name = el('text', { x: lx, y: e.y - 2, class: 'end-label' });
-    name.textContent = e.s.label;
-    const val = el('text', { x: lx, y: e.y + 11, class: 'end-value' });
-    val.textContent = format(e.s.values[e.s.values.length - 1]);
-    svg.append(name, val);
+    svg.appendChild(el('circle', { cx: x(days - 1), cy: y(s.values[days - 1]), r: 3.5, fill: s.color, class: 'end-dot' }));
   }
 
   const cross = el('line', { y1: m.t, y2: height - m.b, class: 'crosshair', visibility: 'hidden' });
   svg.appendChild(cross);
-  const hit = el('rect', { x: m.l, y: m.t, width: width - m.l - m.r, height: height - m.t - m.b, fill: 'transparent' });
+  const hit = el('rect', { x: m.l, y: m.t, width: plotW, height: bottom - m.t, fill: 'transparent' });
   svg.appendChild(hit);
   hit.addEventListener('mousemove', (ev) => {
     const box = svg.getBoundingClientRect();
     const px = ((ev.clientX - box.left) / box.width) * width;
-    const i = Math.max(0, Math.min(days - 1, Math.round(((px - m.l) / (width - m.l - m.r)) * (days - 1))));
+    const i = Math.max(0, Math.min(days - 1, Math.round(((px - m.l) / plotW) * (days - 1))));
     cross.setAttribute('x1', String(x(i)));
     cross.setAttribute('x2', String(x(i)));
     cross.setAttribute('visibility', 'visible');
     const rows = cum
-      .filter((s) => s.values[s.values.length - 1] > 0)
-      .map((s) => `<div class="tt-row"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}<b>${format(s.values[i])}</b></div>`)
+      .map((s) => `<div class="tt-row"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}<b>${esc(usd(s.values[i]))}</b></div>`)
       .join('');
     const total = cum.reduce((a, s) => a + s.values[i], 0);
-    showTip(`<div class="tt-title">Through ${dateLong(cal.date(w.start + i))}</div>${rows}<div class="tt-row tt-total">Total<b>${format(total)}</b></div>`, ev.clientX, ev.clientY);
+    showTip(`<div class="tt-title">Through ${dateLong(cal.date(w.start + i))}</div>${rows}<div class="tt-row tt-total">Total<b>${esc(usd(total))}</b></div>`, ev.clientX, ev.clientY);
   });
   hit.addEventListener('mouseleave', () => {
     cross.setAttribute('visibility', 'hidden');
     hideTip();
   });
   host.appendChild(svg);
+  if (cum.length) {
+    const legend = document.createElement('div');
+    legend.className = 'legend spend-legend';
+    legend.innerHTML = cum.sort((a, b) => b.values[days - 1] - a.values[days - 1])
+      .map((s) => `<span><i style="background:${s.color}"></i><span>${esc(s.label)} <b class="num">${esc(usd(s.values[days - 1]))}</b></span></span>`)
+      .join('');
+    host.appendChild(legend);
+  }
 }
 
 /* ------------------------------------------------------ stacked bar chart */
 
 export function stackedBars(host: HTMLElement, cal: Calendar, w: Window, series: Series[], format: (v: number) => string): void {
   host.replaceChildren();
-  const width = Math.max(320, hostWidth(host) || 800);
+  const width = hostWidth(host) || 800;
   const height = 170;
-  const m = { l: 52, r: 8, t: 8, b: 22 };
+  const m = { l: 60, r: 24, t: 8, b: 22 };
   const days = w.end - w.start + 1;
   // Bucket by week when the window is long, so bars stay legible.
   const bucket = days > 120 ? 7 : 1;
@@ -289,10 +296,11 @@ export function stackedBars(host: HTMLElement, cal: Calendar, w: Window, series:
     t.textContent = format(v);
     svg.appendChild(t);
   }
-  for (const d of xTicks(cal, w, 6)) {
-    const i = Math.floor((d - w.start) / bucket);
+  const tickCount = Math.min(6, n, Math.floor(plotW / 48) + 1);
+  for (let j = 0; j < tickCount; j++) {
+    const i = tickCount === 1 ? 0 : Math.round((j * (n - 1)) / (tickCount - 1));
     const t = el('text', { x: m.l + (i + 0.5) * bw, y: height - 6, class: 'tick', 'text-anchor': 'middle' });
-    t.textContent = dateShort(cal.date(d));
+    t.textContent = dateShort(cal.date(w.start + i * bucket));
     svg.appendChild(t);
   }
   for (let i = 0; i < n; i++) {

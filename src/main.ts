@@ -13,13 +13,14 @@ interface Settings {
   range: RangeKey;
   metric: Metric;
   dailyMetric: 'tokens' | 'cost';
+  spendScale: 'linear' | 'log';
   custom: CustomRange | null;
   weekStart: 0 | 1;
   heatmapColor: string | null;
   pricingCheckedAt: number;
 }
 
-const DEFAULTS: Settings = { theme: 'system', range: '30d', metric: 'tokens', dailyMetric: 'tokens', custom: null, weekStart: 1, heatmapColor: null, pricingCheckedAt: 0 };
+const DEFAULTS: Settings = { theme: 'system', range: '30d', metric: 'tokens', dailyMetric: 'tokens', spendScale: 'linear', custom: null, weekStart: 1, heatmapColor: null, pricingCheckedAt: 0 };
 const STORE_KEY = 'tokenstats.settings.v2';
 
 function loadSettings(): Settings {
@@ -63,7 +64,8 @@ let catalog: CatalogEntry[] = [];
 let version = '';
 let providerError = '';
 let editing: string | null = null;
-let modelSort: { key: keyof ModelRow; dir: 1 | -1 } = { key: 'cost', dir: -1 };
+type ModelSortKey = keyof ModelRow | 'combinedInput';
+let modelSort: { key: ModelSortKey; dir: 1 | -1 } = { key: 'cost', dir: -1 };
 
 const app = document.getElementById('app')!;
 
@@ -113,7 +115,13 @@ function render(): void {
     ${harnessSection(per)}
     <section class="chart-row">
       <div class="card card-pad">
-        <div class="card-title"><h3>Cumulative API-equivalent spend</h3><span class="hint">List prices for the recorded token counts</span></div>
+        <div class="card-title chart-controls">
+          <div><h3>Cumulative API-equivalent spend</h3><div class="hint">List prices for the recorded token counts</div></div>
+          <div class="segmented small" role="group" aria-label="Cumulative spend scale">
+            <button data-spend-scale="linear" aria-pressed="${settings.spendScale === 'linear'}" aria-controls="cum-chart">Linear</button>
+            <button data-spend-scale="log" aria-pressed="${settings.spendScale === 'log'}" aria-controls="cum-chart" title="Logarithmic scale">Log</button>
+          </div>
+        </div>
         <div class="chart-host" id="cum-chart"></div>
       </div>
       <div class="card card-pad">
@@ -130,12 +138,16 @@ function render(): void {
   drawCharts(w, all);
 }
 
+function dailyTitle(): string {
+  return settings.dailyMetric === 'cost' ? 'Daily API-equivalent cost by harness' : 'Daily tokens by harness';
+}
+
 function dailySection(w: Window): string {
   return `<section class="card card-pad" id="daily-section">
-      <div class="card-title"><h3>${settings.dailyMetric === 'cost' ? 'Daily API-equivalent cost by harness' : 'Daily tokens by harness'}</h3><span class="hint">${w.end - w.start + 1 > 120 ? 'Weekly totals' : 'Daily totals'}</span>
-        <div class="spacer"></div>
+      <div class="card-title chart-controls">
+        <div><h3 id="daily-title">${dailyTitle()}</h3><div class="hint">${w.end - w.start + 1 > 120 ? 'Weekly totals' : 'Daily totals'}</div></div>
         <div class="segmented small" role="group" aria-label="Daily chart metric">${(['tokens', 'cost'] as const)
-          .map((m) => `<button data-daily="${m}" aria-pressed="${settings.dailyMetric === m}">${m === 'cost' ? 'Cost' : 'Tokens'}</button>`)
+          .map((m) => `<button data-daily="${m}" aria-pressed="${settings.dailyMetric === m}" aria-controls="daily-chart">${m === 'cost' ? 'Cost' : 'Tokens'}</button>`)
           .join('')}</div></div>
       <div class="legend">${report!.harnesses.map((h, i) => `<span><i style="background:${color(i)}"></i>${esc(h.label)}</span>`).join('')}</div>
       <div class="chart-host" id="daily-chart" style="margin-top:8px"></div>
@@ -268,13 +280,13 @@ function modelsSection(w: Window): string {
   const rows = A!.models(w, modelFilter);
   const totalTokens = rows.reduce((a, r) => a + r.tokens, 0) || 1;
   const k = modelSort.key;
+  const sortValue = (r: ModelRow) => k === 'combinedInput' ? r.input + r.cacheWrite : r[k] ?? -1;
   rows.sort((a, b) => {
-    const nul = (v: unknown) => (v === null ? -1 : v);
-    const x = nul(a[k]), y = nul(b[k]);
+    const x = sortValue(a), y = sortValue(b);
     if (typeof x === 'number' && typeof y === 'number') return (x - y) * modelSort.dir;
     return String(x).localeCompare(String(y)) * modelSort.dir;
   });
-  const th = (label: string, key: keyof ModelRow | null, title = '') =>
+  const th = (label: string, key: ModelSortKey | null, title = '') =>
     key
       ? `<th class="sortable" data-sort="${key}" ${modelSort.key === key ? `aria-sort="${modelSort.dir === 1 ? 'ascending' : 'descending'}"` : ''} title="${title}">${label}${modelSort.key === key ? (modelSort.dir === 1 ? ' ↑' : ' ↓') : ''}</th>`
       : `<th title="${title}">${label}</th>`;
@@ -296,10 +308,9 @@ function modelsSection(w: Window): string {
             <td title="${esc(pricedAs)}"><div class="model-name">${esc(r.name)}</div>${sub ? `<div class="model-sub">${esc(sub)}</div>` : ''}</td>
             <td style="text-align:left"><span class="chips">${r.harnesses.map((h) => `<span class="chip" style="--c:${color(h)}">${esc(report!.harnesses[h].label)}</span>`).join('')}</span></td>
             <td>${int(r.responses)}</td>
-            <td title="${int(r.input)}">${compact(r.input)}</td>
+            <td title="${int(r.input + r.cacheWrite)} total · ${int(r.input)} fresh input · ${int(r.cacheWrite)} cache write">${compact(r.input + r.cacheWrite)}</td>
             <td title="${int(r.output)}">${compact(r.output)}</td>
             <td title="${int(r.cacheRead)}">${compact(r.cacheRead)}</td>
-            <td title="${int(r.cacheWrite)}">${compact(r.cacheWrite)}</td>
             <td>${pct2(r.cacheHitRate)}</td>
             <td><div class="share" title="${int(r.tokens)} tokens"><span>${compact(r.tokens)}</span><span class="bar"><span style="width:${((r.tokens / totalTokens) * 100).toFixed(1)}%"></span></span></div></td>
             <td style="text-align:left">${rates}</td>
@@ -307,7 +318,7 @@ function modelsSection(w: Window): string {
           </tr>`;
         })
         .join('')
-    : `<tr><td colspan="11" class="muted" style="text-align:center;padding:28px">No model usage in this range.</td></tr>`;
+    : `<tr><td colspan="10" class="muted" style="text-align:center;padding:28px">No model usage in this range.</td></tr>`;
   return `<section id="models-section">
     <div class="section-head">
       <div><h2>Models</h2><p class="sub">Token usage and API-equivalent cost per model · rates in USD per million tokens</p></div>
@@ -316,7 +327,7 @@ function modelsSection(w: Window): string {
     <div class="card">
       <div class="table-scroll"><table class="models">
         <thead><tr>
-          ${th('Model', 'name')}<th style="text-align:left">Provider</th>${th('Responses', 'responses')}${th('Input', 'input', 'Fresh (uncached) input tokens')}${th('Output', 'output', 'Output tokens, including reasoning')}${th('Cache read', 'cacheRead')}${th('Cache write', 'cacheWrite')}${th('Cache hit rate', 'cacheHitRate', 'Cache read / (input + cache read + cache write)')}${th('Total', 'tokens')}<th style="text-align:left" title="USD per million tokens: input / output · cache read / cache write">Price / 1M</th>${th('Cost', 'cost')}
+          ${th('Model', 'name')}<th style="text-align:left">Provider</th>${th('Responses', 'responses')}${th('Input', 'combinedInput', 'Fresh input and cache-write tokens')}${th('Output', 'output', 'Output tokens, including reasoning')}${th('Cache read', 'cacheRead')}${th('Cache hit rate', 'cacheHitRate', 'Cache read / (fresh input + cache read + cache write)')}${th('Total', 'tokens')}<th style="text-align:left" title="USD per million tokens: input / output · cache read / cache write">Price / 1M</th>${th('Cost', 'cost')}
         </tr></thead>
         <tbody>${body}</tbody>
       </table></div>
@@ -384,13 +395,16 @@ function drawCharts(w: Window, all: Totals): void {
   }
   drawHeatmaps(w);
   drawDaily(w);
-  const cum = document.getElementById('cum-chart');
-  if (cum) {
-    const series: Series[] = report.harnesses.map((h, i) => ({ label: h.label, color: color(i), values: Array.from(A!.daySeries(i).cost.subarray(w.start, w.end + 1)) }));
-    cumulativeChart(cum, A.cal, w, series, (v) => usd(v));
-  }
+  drawSpend(w);
   const hours = document.getElementById('hour-chart');
   if (hours) hourBars(hours, all.hours, all.peakHour, 'var(--text-2)');
+}
+
+function drawSpend(w: Window): void {
+  const cum = document.getElementById('cum-chart');
+  if (!cum || !report || !A) return;
+  const series: Series[] = report.harnesses.map((h, i) => ({ label: h.label, color: color(i), values: Array.from(A!.daySeries(i).cost.subarray(w.start, w.end + 1)) }));
+  cumulativeChart(cum, A.cal, w, series, settings.spendScale);
 }
 
 function drawDaily(w: Window): void {
@@ -509,7 +523,7 @@ function bindChrome(): void {
 
 /** One delegated listener for the dashboard toggles; each updates only what it affects. */
 app.addEventListener('click', (e) => {
-  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-range],[data-daily],[data-metric],[data-mfilter],[data-sort]');
+  const t = (e.target as HTMLElement).closest<HTMLElement>('[data-range],[data-daily],[data-spend-scale],[data-metric],[data-mfilter],[data-sort]');
   if (!t || !report || !A) return;
   const d = t.dataset;
   if (d.range !== undefined) {
@@ -525,9 +539,16 @@ app.addEventListener('click', (e) => {
   } else if (d.daily !== undefined) {
     settings.dailyMetric = d.daily as Settings['dailyMetric'];
     saveSettings();
-    const w = currentWindow();
-    swap('daily-section', dailySection(w));
-    drawDaily(w);
+    t.parentElement?.querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(button === t)));
+    document.getElementById('daily-title')!.textContent = dailyTitle();
+    hideTip();
+    drawDaily(currentWindow());
+  } else if (d.spendScale !== undefined) {
+    settings.spendScale = d.spendScale as Settings['spendScale'];
+    saveSettings();
+    t.parentElement?.querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(button === t)));
+    hideTip();
+    drawSpend(currentWindow());
   } else if (d.metric !== undefined) {
     settings.metric = d.metric as Metric;
     saveSettings();
@@ -538,7 +559,7 @@ app.addEventListener('click', (e) => {
     modelFilter = d.mfilter === '' ? null : Number(d.mfilter);
     swap('models-section', modelsSection(currentWindow()));
   } else if (d.sort !== undefined) {
-    const key = d.sort as keyof ModelRow;
+    const key = d.sort as ModelSortKey;
     modelSort = modelSort.key === key ? { key, dir: (modelSort.dir * -1) as 1 | -1 } : { key, dir: key === 'name' ? 1 : -1 };
     swap('models-section', modelsSection(currentWindow()));
   }
